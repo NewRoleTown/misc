@@ -67,7 +67,7 @@ struct BtreeNode *search( struct BtreeNode *BN,int key,int &idx ){
 }
 
 void insert_no_full( struct BtreeNode *node,int key ){
-    
+
     int i = 0;
 
     if( node->leaf ){
@@ -98,14 +98,14 @@ void insert_no_full( struct BtreeNode *node,int key ){
 
 void insert( struct Btree *BT,int key ){
     struct BtreeNode *node = BT->root;
-    
+
     if( node->count == 2 * T - 1 ){
         struct BtreeNode *newTop = new struct BtreeNode;
         newTop->leaf = 0;
         newTop->count = 0;
         newTop->chd_ptr[0] = node;
         BT->root = newTop;
-        
+
         split( newTop,0 );
         insert_no_full( newTop,key );
         return;
@@ -124,6 +124,61 @@ struct Btree *create(){
 
     return BT;
 }
+
+
+//  idx-1        idx          idx+1
+//          lr          rp
+//---------------merge---------------
+//   idx-1                idx+1
+//           lr+idx+rp
+//
+
+
+
+void del( struct Btree *BT,int key ){
+
+
+    assert( BT );
+    int idx;
+    struct BtreeNode *toDel;
+    struct BtreeNode *node;
+
+    if( toDel->leaf ){
+        //case1:叶结点,删除+挪位
+        return;
+    }
+
+    //在关键字当前层
+    {
+        if( toDel->chd_ptr[idx]->count >= T ){
+            //case2:非叶，且在此关键字的左子结点关键字数>=T，找前趋,来代替当前结点
+        }else if( toDel->chd_ptr[idx + 1]->count >= T ){
+            //case3:非叶，且在此关键字的右子结点关键字数>=T，找后继,来代替当前结点
+        }else{
+            //case4:左右儿子都只有T-1个关键字,合并左子 = 左子 + key[idx] + 右子,则idx+1失去原左子，获取idx的左子代替idx，
+            //递归，从左子中删key
+        }
+    }
+
+    //关键字不在当前层,在idx子树中
+    {
+        if( node->chd_ptr[idx]->count == T - 1 ){
+            //下层结点的关键字数只有T - 1个,需要保证至少T个,否则删除一个之后不满足B树条件
+            if( (node->chd_ptr[idx - 1]->count == T - 1) && (node->chd_ptr[idx + 1]->count == T - 1) ){
+                //case5:下层结点的相邻兄弟也都只有T - 1个关键字,任选一个合并(加入当前曾的idx号关键字)
+            }else{
+                //case6:某个相邻兄弟结点b包含T个关键字,将当前层idx号关键字下降至chd_ptr[idx]中,b中最小关键字m提至当前层,
+            }
+        }
+    }
+
+
+
+
+
+    return;
+}
+
 
 int main(){
 

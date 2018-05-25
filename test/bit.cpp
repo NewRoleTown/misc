@@ -48,6 +48,28 @@ int solve(){
     return ret;
 }*/
 
+
+#if 0
+
+[l,r)同时增加x
+s(i) = 操作之前的sum(1,i)
+s'(i) = 操作之后的sum(1,i)
+
+i <= l  :   s'(i) = s(i)
+i < r   :   s'(i) = s(i) + (i - l + 1) * x
+i >= r  :   s'(i) = s(i) + (r - l + 1) * x
+
+bin_idx_tree bit0,bit1
+
+
+a1 + a2 + a3 + ... + ai = sum(bit1,i) * i + sum(bit0,i)
+
+suml = [sum(bit1,i) + x] * i + sum(bit0,i) - x(l - 1)
+     = sum(bit1,i) + sum(bit0,i) + x(i - l + 1)
+sumr+ = sum(bit1,i) * i + sum(bit0,i) + (r - l + 1)x
+
+#endif
+
 int main(){
 
 
