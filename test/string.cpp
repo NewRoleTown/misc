@@ -112,6 +112,7 @@ void quick_sort( int *array,int start,int end,int k,int n ){
     return;
 }
 
+int lcp[32];
 
 void calc_suffix( char *pattern ){
 
@@ -139,8 +140,32 @@ void calc_suffix( char *pattern ){
         }
     }
 
+    // idx          x1x2x3x4
+    // idx + 1      x1x2y1y2
+    //x2x3x4,x2y1y2Ò²ÏàÁÚ
+
+    for( int i = 0; i <= n; i++ )
+        srank[ sa[i] ] = i;
+
+    int h = 0;
+    for( int i = 0; i < n; i++ ){
+        int j = sa[ srank[i] - 1 ];
+
+        if( h )
+            h--;
+
+        while( i + h <n && j + h < n){
+            if( pattern[i + h] != pattern[j + h])
+                break;
+            h++;
+        }
+        lcp[ srank[i] - 1 ] = h;
+
+    }
+
     return;
 }
+
 
 int main(){
     char pattern[] = "abracadabra";
