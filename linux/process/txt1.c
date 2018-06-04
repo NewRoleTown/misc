@@ -1,420 +1,315 @@
-#if 1
-调度器不仅仅可以调度进程，还可以以调度实体为单位，一个调度实体可以是一个用户，一个用户组等
+task_struct中mmap_base用于内存映射起始地址,get_unmapped_area在mmap区域中找适当位置
+#define PF_RANDOMIZE	0x00400000	/* randomize virtual address space */
+arch_get_unmapped_area_topdown
 
-EXIT_DEAD状态是指wait系统调用已经发出，进程完全从系统中移除之前的状态
-
-资源限制的数组在signal_struct里面,用户层通过/proc/self/limits查看
-
-pid,tgid为0层pid命名空间的值，既全局值
-
-task_struct 结构体
-struct task_struct {
-    //进程状态
-	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
-    //指向相应的thread_info结构
-	void *stack;
-	atomic_t usage;
-	unsigned int flags;	/* per process flags, defined below */
-	unsigned int ptrace;
-
-    //大内核锁深度
-	int lock_depth;		/* BKL lock depth */
-
-#ifdef CONFIG_SMP
-#ifdef __ARCH_WANT_UNLOCKED_CTXSW
-	int oncpu;
-#endif
-#endif
-    //优先级相关
-    //static可通过nice调用修改
-    //调度器使用prio
-	int prio, static_prio, normal_prio;
-	struct list_head run_list;
-    //调度器类
-	const struct sched_class *sched_class;
-	struct sched_entity se;
-
-#ifdef CONFIG_PREEMPT_NOTIFIERS
-	/* list of struct preempt_notifier: */
-	struct hlist_head preempt_notifiers;
-#endif
-
-	unsigned short ioprio;
-	/*
-	 * fpu_counter contains the number of consecutive context switches
-	 * that the FPU is used. If this is over a threshold, the lazy fpu
-	 * saving becomes unlazy to save the trap. This is an unsigned char
-	 * so that after 256 times the counter wraps and the behavior turns
-	 * lazy again; this to deal with bursty apps that only use FPU for
-	 * a short time
-	 */
-	unsigned char fpu_counter;
-	s8 oomkilladj; /* OOM kill score adjustment (bit shift). */
-#ifdef CONFIG_BLK_DEV_IO_TRACE
-	unsigned int btrace_seq;
-#endif
-
-    //调度策略,一般为SCHED_NORMAL,使用cfs
-    //BATCH(非交互，cpu密集)和IDLE也通过cfs
-    //RR,FIFO用于实时
-	unsigned int policy;
-    //允许运行的cpu掩码
-	cpumask_t cpus_allowed;
-    //时间片
-	unsigned int time_slice;
-
-#if defined(CONFIG_SCHEDSTATS) || defined(CONFIG_TASK_DELAY_ACCT)
-	struct sched_info sched_info;
-#endif
-
-	struct list_head tasks;
-	/*
-	 * ptrace_list/ptrace_children forms the list of my children
-	 * that were stolen by a ptracer.
-	 */
-
-    //子进程，但是在调试器控制下
-	struct list_head ptrace_children;
-	struct list_head ptrace_list;
-
-    //内存描述符,内核线程无前者，借助寄生进程的mm,赋给active_mm
-	struct mm_struct *mm, *active_mm;
-
-/* task state */
-    //二进制格式(一般elf)
-	struct linux_binfmt *binfmt;
-    //退出状态（EXIT_ZOMBIE,EXIT_DEAD）
-	int exit_state;
-	int exit_code, exit_signal;
-    //父进程终止时发送的信号
-	int pdeath_signal;  /*  The signal sent when the parent dies  */
-	/* ??? */
-	unsigned int personality;
-	unsigned did_exec:1;
-    //进程id
-	pid_t pid;
-    //线程组id
-	pid_t tgid;
-
-#ifdef CONFIG_CC_STACKPROTECTOR
-	/* Canary value for the -fstack-protector gcc feature */
-	unsigned long stack_canary;
-#endif
-	/* 
-	 * pointers to (original) parent process, youngest child, younger sibling,
-	 * older sibling, respectively.  (p->father can be replaced with 
-	 * p->parent->pid)
-	 */
-    //真正的父进程，也可能改为init
-	struct task_struct *real_parent; /* real parent process (when being debugged) */
-    //调试状态下为调试者进程
-	struct task_struct *parent;	/* parent process */
-	/*
-	 * children/sibling forms the list of my children plus the
-	 * tasks I'm ptracing.
-	 */
-    //最年轻(prev)的子进程/最老的(next)子进程  的sibling，
-	struct list_head children;	/* list of my children */
-	struct list_head sibling;	/* linkage in my parent's children list */
-    //指向线程组组长
-	struct task_struct *group_leader;	/* threadgroup leader */
-
-	/* PID/PID hash table linkage. */
-    //PID散列表
-	struct pid_link pids[PIDTYPE_MAX];
-    //线程组的链表
-	struct list_head thread_group;
-
-	struct completion *vfork_done;		/* for vfork() */
-	int __user *set_child_tid;		/* CLONE_CHILD_SETTID */
-	int __user *clear_child_tid;		/* CLONE_CHILD_CLEARTID */
-
-    //实时优先级0-99,99最高优先，和nice的使用相反
-	unsigned int rt_priority;
-	cputime_t utime, stime, utimescaled, stimescaled;
-	cputime_t gtime;
-	cputime_t prev_utime, prev_stime;
-    //上下文切换次数
-	unsigned long nvcsw, nivcsw; /* context switch counts */
-	struct timespec start_time; 		/* monotonic time */
-    //启动以来的时间
-	struct timespec real_start_time;	/* boot based time */
-/* mm fault and swap info: this can arguably be seen as either mm-specific or thread-specific */
-	unsigned long min_flt, maj_flt;
-
-  	cputime_t it_prof_expires, it_virt_expires;
-	unsigned long long it_sched_expires;
-	struct list_head cpu_timers[3];
-
-/* process credentials */
-    //身份凭据
-	uid_t uid,euid,suid,fsuid;
-	gid_t gid,egid,sgid,fsgid;
-	struct group_info *group_info;
-	kernel_cap_t   cap_effective, cap_inheritable, cap_permitted;
-	unsigned keep_capabilities:1;
-	struct user_struct *user;
-#ifdef CONFIG_KEYS
-	struct key *request_key_auth;	/* assumed request_key authority */
-	struct key *thread_keyring;	/* keyring private to this thread */
-	unsigned char jit_keyring;	/* default keyring to attach requested keys to */
-#endif
-    //进程名
-	char comm[TASK_COMM_LEN]; /* executable name excluding path
-				     - access with [gs]et_task_comm (which lock
-				       it with task_lock())
-				     - initialized normally by flush_old_exec */
-/* file system info */
-	int link_count, total_link_count;
-#ifdef CONFIG_SYSVIPC
-/* ipc stuff */
-	struct sysv_sem sysvsem;
-#endif
-/* CPU-specific state of this task */
-	struct thread_struct thread;
-/* filesystem information */
-	struct fs_struct *fs;
-/* open file information */
-    //打开文件信息
-	struct files_struct *files;         //fd号为索引
-/* namespaces */
-    //命名空间
-	struct nsproxy *nsproxy;
-/* signal handlers */
-    //信号处理
-	struct signal_struct *signal;
-	struct sighand_struct *sighand;
-
-	sigset_t blocked, real_blocked;
-	sigset_t saved_sigmask;		/* To be restored with TIF_RESTORE_SIGMASK */
-	struct sigpending pending;
-
-	unsigned long sas_ss_sp;
-	size_t sas_ss_size;
-	int (*notifier)(void *priv);
-	void *notifier_data;
-	sigset_t *notifier_mask;
-#ifdef CONFIG_SECURITY
-	void *security;
-#endif
-	struct audit_context *audit_context;
-	seccomp_t seccomp;
-
-/* Thread group tracking */
-   	u32 parent_exec_id;
-   	u32 self_exec_id;
-/* Protection of (de-)allocation: mm, files, fs, tty, keyrings */
-    //可用于一切分配释放的锁
-	spinlock_t alloc_lock;
-
-	/* Protection of the PI data structures: */
-	spinlock_t pi_lock;
-
-#ifdef CONFIG_RT_MUTEXES
-	/* PI waiters blocked on a rt_mutex held by this task */
-	struct plist_head pi_waiters;
-	/* Deadlock detection and priority inheritance handling */
-	struct rt_mutex_waiter *pi_blocked_on;
-#endif
-
-#ifdef CONFIG_DEBUG_MUTEXES
-	/* mutex deadlock detection */
-	struct mutex_waiter *blocked_on;
-#endif
-#ifdef CONFIG_TRACE_IRQFLAGS
-	unsigned int irq_events;
-	int hardirqs_enabled;
-	unsigned long hardirq_enable_ip;
-	unsigned int hardirq_enable_event;
-	unsigned long hardirq_disable_ip;
-	unsigned int hardirq_disable_event;
-	int softirqs_enabled;
-	unsigned long softirq_disable_ip;
-	unsigned int softirq_disable_event;
-	unsigned long softirq_enable_ip;
-	unsigned int softirq_enable_event;
-	int hardirq_context;
-	int softirq_context;
-#endif
-#ifdef CONFIG_LOCKDEP
-# define MAX_LOCK_DEPTH 30UL
-	u64 curr_chain_key;
-	int lockdep_depth;
-	struct held_lock held_locks[MAX_LOCK_DEPTH];
-	unsigned int lockdep_recursion;
-#endif
-
-/* journalling filesystem info */
-	void *journal_info;
-
-/* stacked block device info */
-	struct bio *bio_list, **bio_tail;
-
-/* VM state */
-	struct reclaim_state *reclaim_state;
-
-	struct backing_dev_info *backing_dev_info;
-
-	struct io_context *io_context;
-
-	unsigned long ptrace_message;
-	siginfo_t *last_siginfo; /* For ptrace use.  */
-#ifdef CONFIG_TASK_XACCT
-/* i/o counters(bytes read/written, #syscalls */
-	u64 rchar, wchar, syscr, syscw;
-#endif
-	struct task_io_accounting ioac;
-#if defined(CONFIG_TASK_XACCT)
-	u64 acct_rss_mem1;	/* accumulated rss usage */
-	u64 acct_vm_mem1;	/* accumulated virtual memory usage */
-	cputime_t acct_stimexpd;/* stime since last update */
-#endif
-#ifdef CONFIG_NUMA
-  	struct mempolicy *mempolicy;
-	short il_next;
-#endif
-#ifdef CONFIG_CPUSETS
-	nodemask_t mems_allowed;
-	int cpuset_mems_generation;
-	int cpuset_mem_spread_rotor;
-#endif
-#ifdef CONFIG_CGROUPS
-	/* Control Group info protected by css_set_lock */
-	struct css_set *cgroups;
-	/* cg_list protected by css_set_lock and tsk->alloc_lock */
-	struct list_head cg_list;
-#endif
-#ifdef CONFIG_FUTEX
-	struct robust_list_head __user *robust_list;
-#ifdef CONFIG_COMPAT
-	struct compat_robust_list_head __user *compat_robust_list;
-#endif
-	struct list_head pi_state_list;
-	struct futex_pi_state *pi_state_cache;
-#endif
-	atomic_t fs_excl;	/* holding fs exclusive resources */
-	struct rcu_head rcu;
-
-	/*
-	 * cache last used pipe for splice
-	 */
-	struct pipe_inode_info *splice_pipe;
-#ifdef	CONFIG_TASK_DELAY_ACCT
-    //GHCND
-	struct task_delay_info *delays;
-#endif
-#ifdef CONFIG_FAULT_INJECTION
-	int make_it_fail;
-#endif
-	struct prop_local_single dirties;
-};
-
-struct thread_struct {
-/* cached TLS descriptors. */
-	struct desc_struct tls_array[GDT_ENTRY_TLS_ENTRIES];
-	unsigned long	esp0;
-	unsigned long	sysenter_cs;
-	unsigned long	eip;
-	unsigned long	esp;
-	unsigned long	fs;
-	unsigned long	gs;
-/* Hardware debugging registers */
-	unsigned long	debugreg[8];  /* %%db0-7 debug registers */
-/* fault info */
-	unsigned long	cr2, trap_no, error_code;
-/* floating point info */
-	union i387_union	i387;
-/* virtual 86 mode info */
-	struct vm86_struct __user * vm86_info;
-	unsigned long		screen_bitmap;
-	unsigned long		v86flags, v86mask, saved_esp0;
-	unsigned int		saved_fs, saved_gs;
-/* IO permissions */
-	unsigned long	*io_bitmap_ptr;
- 	unsigned long	iopl;
-/* max allowed port in the bitmap, in bytes: */
-	unsigned long	io_bitmap_max;
-};
-
-
-//pid命名空间
-struct pid_namespace {
-	struct kref kref;
-    //位图，加速分配用?
-	struct pidmap pidmap[PIDMAP_ENTRIES];
-	int last_pid;
-    //指向"局部init"进程，该进程对孤儿进程wait4
-	struct task_struct *child_reaper;
-    //pid分配器
-	struct kmem_cache *pid_cachep;
-    //层数,全局空间为0
-	int level;
-    //指向父空间
-	struct pid_namespace *parent;
-#ifdef CONFIG_PROC_FS
-	struct vfsmount *proc_mnt;
-#endif
-
-    kernel/pi.c->copy_pid_ns()函数中 flags & CLONE_NEWPID与CLONE_THREAD不能共存
-    kernel/fork.c->fork()函数中
-        if( thread_group_leader(p) ){
-            if( clone_flags & CLONE_NEWPID )
-                p->nsproxy->pid_ns->child_reaper = p;
-        }
-    创建新命名空间的进程组组长有责任成为“局部init”
-};
-
-
-enum pid_type
+elf文件执行时会调用如下
+正向mmap_base是1/3的tasksize
+反向tasksize - stackmaxsize - random
+void arch_pick_mmap_layout(struct mm_struct *mm)
 {
-	PIDTYPE_PID,
-	PIDTYPE_PGID,
-	PIDTYPE_SID,
+	/*
+	 * Fall back to the standard layout if the personality
+	 * bit is set, or if the expected stack growth is unlimited:
+	 */
+	if (sysctl_legacy_va_layout ||
+			(current->personality & ADDR_COMPAT_LAYOUT) ||
+			current->signal->rlim[RLIMIT_STACK].rlim_cur == RLIM_INFINITY) {
+		mm->mmap_base = TASK_UNMAPPED_BASE;
+		mm->get_unmapped_area = arch_get_unmapped_area;
+		mm->unmap_area = arch_unmap_area;
+	} else {
+		mm->mmap_base = mmap_base(mm);
+		mm->get_unmapped_area = arch_get_unmapped_area_topdown;
+		mm->unmap_area = arch_unmap_area_topdown;
+	}
+}
+PF_RANDOMIZE在task->personxxty没设置NO_RANDOM时启用
 
-	PIDTYPE_MAX
+如果栈的增长无限制回退标准布局
+/proc/sys/kernel/legacy_va_layout指示是否启用新布局
+以上两者共同决定布局
+
+struct vm_area_struct {
+	struct mm_struct * vm_mm;	/* The address space we belong to. */
+	unsigned long vm_start;		/* Our start address within vm_mm. */
+	unsigned long vm_end;		/* The first byte after our end address
+					   within vm_mm. */
+
+	/* linked list of VM areas per task, sorted by address */
+    //虚拟内存区链表
+	struct vm_area_struct *vm_next;
+
+    //访问权限
+	pgprot_t vm_page_prot;		/* Access permissions of this VMA. */
+    //标志
+	unsigned long vm_flags;		/* Flags, listed below. */
+
+    //虚拟内存区红黑结点，为了加速而已
+	struct rb_node vm_rb;
+
+    //如果有back store或者address space,shared连接到address_space->i_mmap优先树,或者挂在优先树结点外，或连接到address_space->i_mmap_nonlinear链表中的虚拟内存区
+	union {
+		struct {
+			struct list_head list;
+			void *parent;	/* aligns with prio_tree_node parent */ //vm_set不使用parent字段，所以如果这个字段不等于NULL表示在树中,否则,list链接起来
+			struct vm_area_struct *head;
+		} vm_set;
+
+		struct raw_prio_tree_node prio_tree_node;
+	} shared;
+
+	/*
+	 * A file's MAP_PRIVATE vma can be in both i_mmap tree and anon_vma
+	 * list, after a COW of one of the file pages.	A MAP_SHARED vma
+	 * can only be in the i_mmap tree.  An anonymous MAP_PRIVATE, stack
+	 * or brk vma (with NULL file) can only be in an anon_vma list.
+	 */
+    //指向相同页的映射都保存在一个链表，以下为链表元素
+	struct list_head anon_vma_node;	/* Serialized by anon_vma->lock */
+	struct anon_vma *anon_vma;	/* Serialized by page_table_lock */
+
+	/* Function pointers to deal with this struct. */
+	struct vm_operations_struct * vm_ops;
+
+	/* Information about our backing store: */
+    //vm_file内的偏移量,pagesize对齐
+	unsigned long vm_pgoff;
+	struct file * vm_file;		/* File we map to (can be NULL). */
+	void * vm_private_data;		/* was vm_pte (shared mem) */
+	unsigned long vm_truncate_count;/* truncate_count or restart_addr */
+
+#ifndef CONFIG_MMU
+	atomic_t vm_usage;		/* refcount (VMAs shared if !MMU) */
+#endif
 };
 
-struct upid {
-	/* Try to keep pid_chain in the same cacheline as nr for find_pid */
-	int nr;
-	struct pid_namespace *ns;
-	struct hlist_node pid_chain;
-};
+//vm flags
+#define VM_READ		0x00000001	/* currently active flags */
+#define VM_WRITE	0x00000002
+#define VM_EXEC		0x00000004
+#define VM_SHARED	0x00000008
 
-struct pid
+/* mprotect() hardcodes VM_MAYREAD >> 4 == VM_READ, and so for r/w/x bits. */
+#define VM_MAYREAD	0x00000010	/* limits for mprotect() etc */
+#define VM_MAYWRITE	0x00000020
+#define VM_MAYEXEC	0x00000040
+#define VM_MAYSHARE	0x00000080
+
+#define VM_GROWSDOWN	0x00000100	/* general info on the segment */
+#define VM_GROWSUP	0x00000200
+#define VM_PFNMAP	0x00000400	/* Page-ranges managed without "struct page", just pure PFN */
+#define VM_DENYWRITE	0x00000800	/* ETXTBSY on write attempts.. */
+
+#define VM_EXECUTABLE	0x00001000
+#define VM_LOCKED	0x00002000
+#define VM_IO           0x00004000	/* Memory mapped I/O or similar */
+
+					/* Used by sys_madvise() */
+#define VM_SEQ_READ	0x00008000	/* App will access data sequentially */
+#define VM_RAND_READ	0x00010000	/* App will not benefit from clustered reads */
+
+#define VM_DONTCOPY	0x00020000      /* Do not copy this vma on fork */
+#define VM_DONTEXPAND	0x00040000	/* Cannot expand with mremap() */
+#define VM_RESERVED	0x00080000	/* Count as reserved_vm like IO */
+#define VM_ACCOUNT	0x00100000	/* Is a VM accounted object */
+#define VM_HUGETLB	0x00400000	/* Huge TLB Page VM */
+#define VM_NONLINEAR	0x00800000	/* Is non-linear (remap_file_pages) */
+#define VM_MAPPED_COPY	0x01000000	/* T if mapped copy of data (nommu mmap) */
+#define VM_INSERTPAGE	0x02000000	/* The vma has had "vm_insert_page()" done on it */
+#define VM_ALWAYSDUMP	0x04000000	/* Always include in core dumps */
+
+#define VM_CAN_NONLINEAR 0x08000000	/* Has ->fault & does nonlinear pages */
+
+#ifndef VM_STACK_DEFAULT_FLAGS		/* arch can override this */
+#define VM_STACK_DEFAULT_FLAGS VM_DATA_DEFAULT_FLAGS
+#endif
+
+#ifdef CONFIG_STACK_GROWSUP
+#define VM_STACK_FLAGS	(VM_GROWSUP | VM_STACK_DEFAULT_FLAGS | VM_ACCOUNT)
+#else
+#define VM_STACK_FLAGS	(VM_GROWSDOWN | VM_STACK_DEFAULT_FLAGS | VM_ACCOUNT)
+#endif
+
+#define VM_READHINTMASK			(VM_SEQ_READ | VM_RAND_READ)
+#define VM_ClearReadHint(v)		(v)->vm_flags &= ~VM_READHINTMASK
+#define VM_NormalReadHint(v)		(!((v)->vm_flags & VM_READHINTMASK))
+#define VM_SequentialReadHint(v)	((v)->vm_flags & VM_SEQ_READ)
+#define VM_RandomReadHint(v)		((v)->vm_flags & VM_RAND_READ)
+
+struct file中有一个指向address_space的指针f_mapping
+
+struct address_space {
+	struct inode		*host;		/* owner: inode, block_device */
+	struct radix_tree_root	page_tree;	/* radix tree of all pages */
+	rwlock_t		tree_lock;	/* and rwlock protecting it */
+	unsigned int		i_mmap_writable;/* count VM_SHARED mappings */
+	struct prio_tree_root	i_mmap;		/*私有和共享映射的树 */
+    //VM_NONLINEAR映射链表,非线性映射用
+	struct list_head	i_mmap_nonlinear;/*list VM_NONLINEAR mappings */
+	spinlock_t		i_mmap_lock;	/* protect tree, count, list */
+	unsigned int		truncate_count;	/* Cover race condition with truncate */
+	unsigned long		nrpages;	/* number of total pages */
+	pgoff_t			writeback_index;/* writeback starts here */
+	const struct address_space_operations *a_ops;	/* methods */
+	unsigned long		flags;		/* error bits/gfp mask */
+	struct backing_dev_info *backing_dev_info; /* device readahead, etc */
+	spinlock_t		private_lock;	/* for use by the address_space */
+	struct list_head	private_list;	/* ditto */
+	struct address_space	*assoc_mapping;	/* ditto */
+} __attribute__((aligned(sizeof(long))));
+
+和list_head i_mmap_nonlinear
+
+//先尝试插入优先树，如果已经有了相同(地址起始,地址结束)，则进if流程，此时ptr指向相同的结点
+void vma_prio_tree_insert(struct vm_area_struct *vma,
+			  struct prio_tree_root *root)
 {
-    //引用计数
-	atomic_t count;
-	/* lists of tasks that use this pid */
-    //第一层应该只会有一个人用?
-	struct hlist_head tasks[PIDTYPE_MAX];
-	struct rcu_head rcu;
-    //层数
-	int level;
-    //每层一个upid结构，upid中有指向相应命名空间的指针
-	struct upid numbers[1];
-};
+	struct prio_tree_node *ptr;
+	struct vm_area_struct *old;
 
-struct pid_link
-{
-	struct hlist_node node;
-	struct pid *pid;
-};
+	vma->shared.vm_set.head = NULL;
 
-//img_pid_hash.png
-每个task_struct有PIDTYPE_MAX个pid_link,link中的pid指向一个pid结构,所有指向pid结构的task_struct被pid结构中对应的ID类型的hlist_head相连接
-( 既pid结构为全局结构 )
-举例来说，A的PID为N，B的PGID为N，C的PGID为N，则A的pids[0]指向pid,B,C的pids[1]指向pid，而pid->tasks[1]将B，C串起
+	ptr = raw_prio_tree_insert(root, &vma->shared.prio_tree_node);
 
-pid_hash是一个全局散列表
-将upid串起
-
-attach( task,type,pid ){
-    task->pids[type]->pid = pid;
-    insert( pid->tasks[type],&task->pids[type]->node );
+	if (ptr != (struct prio_tree_node *) &vma->shared.prio_tree_node) {
+        //获取vm_area
+		old = prio_tree_entry(ptr, struct vm_area_struct,
+					shared.prio_tree_node);
+		vma_prio_tree_add(vma, old);
+	}
 }
 
-vfork不创建父进程的副本，共享数据，子进程退出或开始新程序之前，父进程阻塞
-线程的栈是事先分配的
+如果这个结点有parent,说明在树里，如果head还没有初始化，初始化一下，然后建链，否则add_tail
+void vma_prio_tree_add(struct vm_area_struct *vma, struct vm_area_struct *old)
+{
+	vma->shared.vm_set.head = NULL;
+	vma->shared.vm_set.parent = NULL;
 
-#endif
+	if (!old->shared.vm_set.parent)
+		list_add(&vma->shared.vm_set.list,
+				&old->shared.vm_set.list);
+	else if (old->shared.vm_set.head)
+		list_add_tail(&vma->shared.vm_set.list,
+				&old->shared.vm_set.head->shared.vm_set.list);
+	else {
+		INIT_LIST_HEAD(&vma->shared.vm_set.list);
+		vma->shared.vm_set.head = old;
+		old->shared.vm_set.head = vma;
+	}
+}
+
+unsigned long
+arch_get_unmapped_area(struct file *filp, unsigned long addr,
+		unsigned long len, unsigned long pgoff, unsigned long flags)
+{
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *vma;
+	unsigned long start_addr;
+	unsigned long begin, end;
+	
+    //如果设置了固定地址，直接返回不寻找空闲区
+	if (flags & MAP_FIXED)
+		return addr;
+
+	find_start_end(flags, &begin, &end); 
+
+	if (len > end)
+		return -ENOMEM;
+    //如果该地址可用,返回
+	if (addr) {
+		addr = PAGE_ALIGN(addr);
+		vma = find_vma(mm, addr);
+		if (end - len >= addr &&
+		    (!vma || addr + len <= vma->vm_start))
+			return addr;
+	}
+	if (((flags & MAP_32BIT) || test_thread_flag(TIF_IA32))
+	    && len <= mm->cached_hole_size) {
+	        mm->cached_hole_size = 0;
+		mm->free_area_cache = begin;
+	}
+	addr = mm->free_area_cache;
+	if (addr < begin) 
+		addr = begin; 
+	start_addr = addr;
+//忽略addr找其他的
+full_search:
+	for (vma = find_vma(mm, addr); ; vma = vma->vm_next) {
+		/* At this point:  (!vma || addr < vma->vm_end). */
+		if (end - len < addr) {
+			/*
+			 * Start a new search - just in case we missed
+			 * some holes.
+			 */
+			if (start_addr != begin) {
+				start_addr = addr = begin;
+				mm->cached_hole_size = 0;
+				goto full_search;
+			}
+			return -ENOMEM;
+		}
+		if (!vma || addr + len <= vma->vm_start) {
+			/*
+			 * Remember the place where we stopped the search:
+			 */
+			mm->free_area_cache = addr + len;
+			return addr;
+		}
+		if (addr + mm->cached_hole_size < vma->vm_start)
+		        mm->cached_hole_size = vma->vm_start - addr;
+
+		addr = vma->vm_end;
+	}
+}
+
+#define PAGE_MAPPING_ANON	1
+static void __page_set_anon_rmap(struct page *page,
+	struct vm_area_struct *vma, unsigned long address)
+{
+	struct anon_vma *anon_vma = vma->anon_vma;
+
+	anon_vma = (void *) anon_vma + PAGE_MAPPING_ANON;
+	page->mapping = (struct address_space *) anon_vma;
+
+    //算出文件偏移量(pagesize对齐)
+	page->index = linear_page_index(vma, address);
+
+    //更新统计量
+	__inc_zone_page_state(page, NR_ANON_PAGES);
+}
+
+page_add_new_anon_rmap
+page_add_anon_rmap
+page_referenced
+
+static int page_referenced_one(struct page *page,
+	struct vm_area_struct *vma, unsigned int *mapcount)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	unsigned long address;
+	pte_t *pte;
+	spinlock_t *ptl;
+	int referenced = 0;
+    //获取该页在进程虚拟空间中的地址
+	address = vma_address(page, vma);
+	if (address == -EFAULT)
+		goto out;
+
+	pte = page_check_address(page, mm, address, &ptl);
+	if (!pte)
+		goto out;
+
+	if (ptep_clear_flush_young(vma, address, pte))
+		referenced++;
+
+	/* Pretend the page is referenced if the task has the
+	   swap token and is in the middle of a page fault. */
+	if (mm != current->mm && has_swap_token(mm) &&
+			rwsem_is_locked(&mm->mmap_sem))
+		referenced++;
+
+	(*mapcount)--;
+	pte_unmap_unlock(pte, ptl);
+out:
+	return referenced;
+}
