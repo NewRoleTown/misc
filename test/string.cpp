@@ -143,24 +143,27 @@ void calc_suffix( char *pattern ){
     // idx          x1x2x3x4
     // idx + 1      x1x2y1y2
     //x2x3x4,x2y1y2也相邻
+    //从字符串idx = 0开始计算
+    //
+    //当计算idx开始的字符串时，<idx 的 idx'已经计算完成，其结果h可以复用
 
     for( int i = 0; i <= n; i++ )
         srank[ sa[i] ] = i;
 
     int h = 0;
     for( int i = 0; i < n; i++ ){
-        int j = sa[ srank[i] - 1 ];
+        //求出排在pattern[i]开头的后缀后一个位置的后缀的其实下标
+        int j = sa[ srank[i] + 1 ];
 
         if( h )
             h--;
 
-        while( i + h <n && j + h < n){
+        while( i + h < n && j + h < n){
             if( pattern[i + h] != pattern[j + h])
                 break;
             h++;
         }
-        lcp[ srank[i] - 1 ] = h;
-
+        lcp[ srank[i]  ] = h;
     }
 
     return;
@@ -170,5 +173,10 @@ void calc_suffix( char *pattern ){
 int main(){
     char pattern[] = "abracadabra";
     calc_suffix( pattern );
+
+    for( int i = 0; i < 11; i++ ){
+        cout<<lcp[i]<<" ";
+    }
+    cout<<endl;
 
 }
