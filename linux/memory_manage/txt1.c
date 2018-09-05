@@ -1,3 +1,12 @@
+代码段描述符的L位指示代码是否默认为64位
+代码段的D/B位指示代码32位还是16位
+
+低特权级的代码到高特权级运行只有一种情况，就是call调用門到非一致代码段
+此时dpl < gate_dpl,cpl > dest_dpl,进call后cpl不变
+
+
+
+
 enum zone_type {
 #ifdef CONFIG_ZONE_DMA
 	/*

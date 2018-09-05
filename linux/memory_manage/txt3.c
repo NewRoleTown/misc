@@ -313,3 +313,16 @@ void *kmap_atomic_prot(struct page *page, enum km_type type, pgprot_t prot)
 
 	return (void *)vaddr;
 }
+
+
+void __set_fixmap (enum fixed_addresses idx, unsigned long phys, pgprot_t flags)
+{
+	unsigned long address = __fix_to_virt(idx);
+
+	if (idx >= __end_of_fixed_addresses) {
+		BUG();
+		return;
+	}
+	set_pte_pfn(address, phys >> PAGE_SHIFT, flags);
+	fixmaps++;
+}
