@@ -13,7 +13,6 @@
 #include<unistd.h>
 #include<stdlib.h>
 #include"Base64.h"
-//thunder://QUFodHRwOi8vYnRmaWxlLmh5ZHMzNjAuY29tL20vM0RNR0FNRS1EYXJrLlNvdWxzLlJlbWFzdGVyZWQuQ3JhY2tlZC0zRE0udG9ycmVudFpa
 #define HP_MAX_LEN 8187
 struct http_pack{
     int pos;
