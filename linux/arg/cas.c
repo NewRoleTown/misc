@@ -22,6 +22,11 @@ void *thread1( void *p ){
 		int tmp = count;
 		int succ;
 		asm volatile("cmpxchg %2,%1":"=a"(succ):"m"(count),"b"(tmp+1),"a"(tmp):);
+		/*if( %1(r/m) == eax ){
+			(r/m) = %2(r/m)	
+		}else{
+			eax = %1(r/m)
+		}*/
 		if( succ == tmp )
 			i--;
 		else
