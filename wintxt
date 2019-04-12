@@ -1,0 +1,73 @@
+#define LOCK_ADDRESS_SPACE(PROCESS)                                  \
+            KeAcquireGuardedMutex (&((PROCESS)->AddressCreationLock));
+             
+#define UNLOCK_ADDRESS_SPACE(PROCESS)                               \
+            KeReleaseGuardedMutex (&((PROCESS)->AddressCreationLock));
+
+
+这个锁的位置在EPROCESS里面，偏移在各个系统应该也不一样，所以要用的话得自己根据系统版本硬编码了。下面这个是XP的：
+
+nt!_EPROCESS
+   +0x000 Pcb              : _KPROCESS
+   +0x06c ProcessLock      : _EX_PUSH_LOCK
+   +0x070 CreateTime       : _LARGE_INTEGER
+   +0x078 ExitTime         : _LARGE_INTEGER
+   +0x080 RundownProtect   : _EX_RUNDOWN_REF
+   +0x084 UniqueProcessId  : Ptr32 Void
+   +0x088 ActiveProcessLinks : _LIST_ENTRY
+   +0x090 QuotaUsage       : [3] Uint4B
+   +0x09c QuotaPeak        : [3] Uint4B
+   +0x0a8 CommitCharge     : Uint4B
+   +0x0ac PeakVirtualSize  : Uint4B
+   +0x0b0 VirtualSize      : Uint4B
+   +0x0b4 SessionProcessLinks : _LIST_ENTRY
+   +0x0bc DebugPort        : Ptr32 Void
+   +0x0c0 ExceptionPort    : Ptr32 Void
+   +0x0c4 ObjectTable      : Ptr32 _HANDLE_TABLE
+   +0x0c8 Token            : _EX_FAST_REF
+   +0x0cc WorkingSetLock   : _FAST_MUTEX
+   +0x0ec WorkingSetPage   : Uint4B
+   [COLOR="Red"][B]+0x0f0 AddressCreationLock : _FAST_MUTEX[/B][/COLOR]  
+   +0x110 HyperSpaceLock   : Uint4B
+   +0x114 ForkInProgress   : Ptr32 _ETHREAD
+   +0x118 HardwareTrigger  : Uint4B
+
+  
+
+在加载PE文件时NtMapViewOfSection会调用这个：  
+
+MmMapViewOfSection
+{
+//
+    // Get the address creation mutex to block multiple threads
+    // creating or deleting address space at the same time.
+    //
+   
+    LOCK_ADDRESS_SPACE (Process);
+     
+    //Map Image
+    status = [COLOR="Red"][B]MiMapViewOfImageSection [/B][/COLOR](ControlArea,
+              Process,
+              CapturedBase,
+              SectionOffset,
+              CapturedViewSize,
+              Section,
+              InheritDisposition,
+              ZeroBits,
+              AllocationType,
+              ImageCommitment);
+                                               
+  UNLOCK_ADDRESS_SPACE (Process);
+ 
+}
+ 
+//在这个函数里调用回调
+MiMapViewOfImageSection
+{
+    ......
+    [COLOR="red"][B]PsCallImageNotifyRoutines[/B][/COLOR]();//此时锁是Lock状态
+    ......
+}
+
+
+所以，你要在NotifyRoutine里先UNLOCK_ADDRESS_SPACE，然后调用ZwProtectVirturlMemory修改属性，完事儿再LOCK_ADDRESS_SPACE，这样就可以愉快地Patch了。
