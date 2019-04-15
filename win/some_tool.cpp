@@ -40,6 +40,8 @@ BEGIN_MESSAGE_MAP(Cwin32hpDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_MOD_EMU, &Cwin32hpDlg::OnBnClickedModEmu)
 	ON_BN_CLICKED(IDC_BTN_DLLH, &Cwin32hpDlg::OnBnClickedBtnDllh)
 	ON_BN_CLICKED(IDC_BTN_GETOEP, &Cwin32hpDlg::OnBnClickedBtnGetoep)
+	ON_BN_CLICKED(IDC_BTN_TINJ, &Cwin32hpDlg::OnBnClickedBtnTinj)
+	ON_BN_CLICKED(IDC_BTN_SCAN, &Cwin32hpDlg::OnBnClickedBtnScan)
 END_MESSAGE_MAP()
 
 
@@ -199,7 +201,7 @@ void Cwin32hpDlg::OnBnClickedRmStart()
 		sprintf(msg,"注入失败%d",ret );
 		MessageBox(msg);
 	}
-	// TODO: 在此添加控件通知处理程序代码
+
 }
 
 
@@ -1034,7 +1036,7 @@ int Cwin32hpDlg::oepInject( DWORD pid,DWORD oep ){
 	*(DWORD *)(newcode + 9) = MessageBoxAddr - (oep + 9 + 4);
 	*(DWORD *)(newcode + 14) = oldEip - (oep + 14 + 4);
 	*/
-
+	
 	char buff[1024];
 	GetDlgItem(IDC_CI_CODE)->GetWindowText(buff,sizeof(buff));
 
@@ -1042,7 +1044,7 @@ int Cwin32hpDlg::oepInject( DWORD pid,DWORD oep ){
 		MessageBox("代码为空");
 		return -6;
 	}
-
+	
 	int len = strlen(buff);
 	unsigned char *pfix = fixcode(oldEip,oep,buff,len );
 	//6A0068043040006A006A00E8776B7E60
@@ -1055,18 +1057,21 @@ int Cwin32hpDlg::oepInject( DWORD pid,DWORD oep ){
 	iSucc = VirtualProtectEx( TargetHandle,(LPVOID)oep,len,PAGE_EXECUTE_READWRITE,&oldFlag );
 	if( FALSE == iSucc ){
 		MessageBox("属性修改失败");
+		delete[] pfix;
 		return -2;
 	}
-
+	
 	iSucc = WriteProcessMemory( TargetHandle,(LPVOID)oep,pfix,len,&nWrite );
 	if( FALSE == iSucc ){
 		MessageBox("写入失败");
+		delete[] pfix;
 		return -3;
 	}
-	
+
 	iSucc = VirtualProtectEx( TargetHandle,(LPVOID)oep,len,oldFlag,&oldFlag );
 	if( FALSE == iSucc ){
 		MessageBox("属性修改失败");
+		delete[] pfix;
 		return -4;
 	}
 
@@ -1076,7 +1081,8 @@ int Cwin32hpDlg::oepInject( DWORD pid,DWORD oep ){
 	
 	TRACE("Set ctx iSucc = %d\n",iSucc);
 	ResumeThread(thandle);
-	
+
+	delete[] pfix;
 	CloseHandle(thandle);
 	CloseHandle(TargetHandle);
 	return 0;
@@ -1088,7 +1094,7 @@ void Cwin32hpDlg::OnBnClickedBtnGetoep()
 	int ret = -1;
 
 	DWORD Pid;
-
+	
 	memset( pid,0,sizeof(pid) );
 
 	GetDlgItem(IDC_ED_OEP_PID)->GetWindowText(pid,sizeof(pid));
@@ -1102,4 +1108,730 @@ void Cwin32hpDlg::OnBnClickedBtnGetoep()
 	}
 
 	oepInject( Pid,oep );
+}
+
+#define my_align_up(addr,align) ((addr + align - 1)&(~(align - 1)))
+
+int Cwin32hpDlg::entireInject( const char *dllPath,DWORD Pid ){
+
+	HANDLE TargetHandle = OpenProcess( PROCESS_ALL_ACCESS,0,Pid );
+	if( INVALID_HANDLE_VALUE == TargetHandle )
+		return -1;
+
+	HANDLE hFile = CreateFile(dllPath,GENERIC_READ,0,NULL,OPEN_ALWAYS,0,NULL);
+	char buff[81920];
+
+	if( INVALID_HANDLE_VALUE == hFile ){
+		MessageBox("file open error");
+		return -1;
+	}
+
+	LARGE_INTEGER size;
+	::GetFileSizeEx(hFile,&size);
+
+	DWORD nRead;
+	ReadFile( hFile,buff,40960,&nRead,NULL );
+
+	if( nRead != size.QuadPart ){
+		MessageBox("缓冲区不足");
+		return -2;
+	}
+
+	IMAGE_DOS_HEADER *pIDH = (IMAGE_DOS_HEADER *)buff;
+	IMAGE_FILE_HEADER *pIFH = (IMAGE_FILE_HEADER *)(buff + pIDH->e_lfanew + 4);
+
+	//节区的数量
+	int nSections = pIFH->NumberOfSections;
+	TRACE("%d\n",nSections);
+	//可选头部的大小
+	int nsizeOptHeader = pIFH->SizeOfOptionalHeader;
+	TRACE("%d\n",nsizeOptHeader);
+
+	IMAGE_OPTIONAL_HEADER32 *pIOH = (IMAGE_OPTIONAL_HEADER32 *)((char *)pIFH + sizeof(IMAGE_FILE_HEADER)); 
+
+	DWORD nImageSize = pIOH->SizeOfImage;
+	IMAGE_SECTION_HEADER *pISH = (IMAGE_SECTION_HEADER *)((char *)pIOH + nsizeOptHeader);
+
+	//nImageSize -= pISH->VirtualAddress;
+
+	BOOL isSucc;
+
+	TRACE("nImageSize = %x\n",nImageSize );
+	LPVOID newDllBase = VirtualAllocEx( TargetHandle,NULL,nImageSize,MEM_COMMIT,PAGE_EXECUTE_READWRITE );
+
+	if( !newDllBase ){
+		TRACE("LAST ERROR = %d\n",GetLastError());
+		MessageBox("进程内存分配失败");
+		return -3;
+	}
+	TRACE("newDllBase = %x\n",newDllBase);
+
+	//修复重定位
+	DWORD reloc_size = pIOH->DataDirectory[5].Size;
+	DWORD rva = pIOH->DataDirectory[5].VirtualAddress;
+
+	DWORD raw = 0;
+
+	IMAGE_SECTION_HEADER *ptISH = pISH;
+
+	for( int i = 0; i < nSections; i++,ptISH++ ){
+		if( (rva >= ptISH->VirtualAddress) && 
+			(rva <= ptISH->VirtualAddress + ptISH->SizeOfRawData)){
+				raw = ptISH->PointerToRawData + rva - ptISH->VirtualAddress;
+				break;
+		}
+	}
+
+	if( raw == 0 ){
+		MessageBox("地址转换失败1");
+		return -4;
+	}
+
+	IMAGE_BASE_RELOCATION *pIBR = (IMAGE_BASE_RELOCATION *)(buff + raw);
+
+	for( int of = 0; of < reloc_size; ){
+		DWORD virtualBase = pIBR->VirtualAddress;
+		rva = virtualBase;
+		raw = 0;
+		ptISH = pISH;
+
+
+		for( int i = 0; i < nSections; i++,ptISH++ ){
+			if( (rva >= ptISH->VirtualAddress) && 
+				(rva <= ptISH->VirtualAddress + ptISH->SizeOfRawData)){
+					raw = ptISH->PointerToRawData + rva - ptISH->VirtualAddress;
+					break;
+			}
+		}
+
+		if( raw == 0 ){
+			MessageBox("地址转换失败2");
+			return -4;
+		}
+
+		int n = (pIBR->SizeOfBlock - 8)/2;
+		unsigned short *po = (unsigned short *)((char *)pIBR + sizeof(IMAGE_BASE_RELOCATION));
+		for( int i = 0; i < n; i++ ){
+			
+			DWORD *fix_addr = (DWORD *)(buff + raw + ((*po) & 0xfff));
+			
+			TRACE("<FIX %x>\n",virtualBase + ((*po) & 0xfff));
+
+			if( pIOH->ImageBase > (DWORD)newDllBase ){
+				*fix_addr -= ( pIOH->ImageBase - (DWORD)newDllBase );
+			}else{
+				*fix_addr += ( (DWORD)newDllBase - pIOH->ImageBase );
+			}
+			po++;
+
+		}
+		of += pIBR->SizeOfBlock;
+		pIBR = (IMAGE_BASE_RELOCATION *)((char *)(pIBR) + pIBR->SizeOfBlock);
+	}
+	
+	//修复导入表
+	rva = pIOH->DataDirectory[1].VirtualAddress;
+	raw = 0;
+
+	ptISH = pISH;
+
+	for( int i = 0; i < nSections; i++,ptISH++ ){
+		if( (rva >= ptISH->VirtualAddress) && 
+			(rva <= ptISH->VirtualAddress + ptISH->SizeOfRawData)){
+				raw = ptISH->PointerToRawData + rva - ptISH->VirtualAddress;
+				break;
+		}
+	}
+
+	if( raw == 0 ){
+		MessageBox("地址转换失败3");
+		return -4;
+	}
+
+	IMAGE_IMPORT_DESCRIPTOR *pIID = (IMAGE_IMPORT_DESCRIPTOR *)(buff + raw);
+
+	int dllNum = 0;
+	while( 0 != pIID->Name ){
+		char *dllName = buff + pIID->Name - rva + raw ;
+		TRACE("%s\n",dllName);
+
+		HMODULE hMod = LoadLibrary(dllName);
+
+		if( INVALID_HANDLE_VALUE == hMod ){
+			MessageBox("dll加载出错");
+			return -5;
+		}
+
+		DWORD real_addr;
+		DWORD *pfn_arr = (DWORD *)(buff + raw + pIID->FirstThunk - rva);
+		//DWORD *pfr_arr = (DWORD *)(buff + raw + pIID->OriginalFirstThunk - rva);
+
+		while( *pfn_arr ){
+			TRACE("%s\n",(char *)(buff + raw + *pfn_arr - rva + 2));
+			real_addr = (DWORD)GetProcAddress(hMod,(char *)(buff + raw + *pfn_arr - rva + 2));
+
+			if( !real_addr ){
+				MessageBox("函数加载出错");
+				return -6;
+			}
+			
+			*pfn_arr = real_addr;
+			//TRACE("%s\n",(char *)(buff + raw + *pfn_arr - rva + 2));
+			pfn_arr++;
+		}
+
+		//CloseHandle(hMod);
+
+		pIID++;
+		dllNum++;
+	}
+
+
+
+	//开始映射段
+	for( int i = 0; i < nSections; i++ ){
+		DWORD nSectionSize = pISH->Misc.VirtualSize;
+		DWORD nWrite;
+		isSucc = WriteProcessMemory( TargetHandle,(LPVOID)((char *)newDllBase + pISH->VirtualAddress),buff + pISH->PointerToRawData,nSectionSize,&nWrite );
+
+		if( !isSucc || (nSectionSize != nWrite) ){
+			MessageBox("写入失败");
+			return -5;
+		}
+
+		//newDllBase = (LPVOID)((char *)newDllBase + my_align_up(pISH->Misc.VirtualSize,pIOH->SectionAlignment));
+		pISH++;
+	}
+
+	return 0;
+}
+
+void Cwin32hpDlg::OnBnClickedBtnTinj()
+{
+	char dllPath[128];
+	char pid[8];
+	int ret = -1;
+
+	DWORD Pid;
+	memset( dllPath,0,sizeof(dllPath) );
+	memset( pid,0,sizeof(pid) );
+
+	GetDlgItem(IDC_RM_DLL_PATH)->GetWindowText(dllPath,sizeof(dllPath));
+
+	GetFileAttributes(dllPath);
+	if( FALSE == IsDllExist(dllPath) ){
+		MessageBox("dll文件不存在");
+		return;
+	}
+
+	GetDlgItem(IDC_RM_PID)->GetWindowText(pid,sizeof(pid));
+	Pid = atoi(pid);
+
+
+	entireInject( dllPath,Pid );
+}
+
+
+void Cwin32hpDlg::OnBnClickedBtnScan()
+{
+	char pid[8];
+	DWORD Pid;
+	memset( pid,0,sizeof(pid) );
+	GetDlgItem(IDC_SCAN_PID)->GetWindowText(pid,sizeof(pid));
+	Pid = atoi(pid);
+
+	doScan(Pid);
+}
+
+int Cwin32hpDlg::compareDll( CString &dllpath,DWORD dllbase,DWORD imagesize,HANDLE target ){
+	
+	dllpath.MakeLower();
+	
+	map<char*,map<char*,DWORD> >::iterator iter = import_table_cache.begin();
+
+	while( iter != import_table_cache.end() ){
+		CString dllname(iter->first);
+		dllname.MakeLower();
+		if( -1 != dllpath.Find(dllname) ){
+			break;
+		}
+		iter++;
+	}
+
+	if( iter ==import_table_cache.end() )
+		return 0;
+
+	string dllpath_lower(dllpath.GetBuffer(dllpath.GetLength()));
+
+	TRACE("<<NOW SCAN DLL = %s BaseAddr = %x>>\n",dllpath_lower.c_str(),dllbase );
+
+	//wchar_t wcstring[256];
+	//MultiByteToWideChar(CP_ACP,0,dllpath,-1,wcstring,256);
+	//TRACE(L"<<NOW SCAN DLL %ws>>\n",wcstring);
+
+	
+	HANDLE hFile = CreateFileA(dllpath_lower.c_str(),GENERIC_READ,0,NULL,OPEN_ALWAYS,0,NULL);
+
+	if( INVALID_HANDLE_VALUE == hFile ){
+		MessageBox("file open error");
+		return -1;
+	}
+
+	LARGE_INTEGER size;
+	::GetFileSizeEx(hFile,&size);
+
+	char *buff = new char[size.QuadPart];
+
+	DWORD nRead;
+	ReadFile( hFile,buff,size.QuadPart,&nRead,NULL );
+
+	if( nRead != size.QuadPart ){
+		delete[] buff;
+		MessageBox("读取错误");
+		return -2;
+	}
+	
+	//1查看有没有IAT HOOK
+
+	IMAGE_DOS_HEADER *pIDH = (IMAGE_DOS_HEADER *)buff;
+	IMAGE_FILE_HEADER *pIFH = (IMAGE_FILE_HEADER *)(buff + pIDH->e_lfanew + 4);
+
+	//节区的数量
+	int nSections = pIFH->NumberOfSections;
+	//TRACE("dll节区数量 %d\n",nSections);
+	//可选头部的大小
+	int nsizeOptHeader = pIFH->SizeOfOptionalHeader;
+	//TRACE("%d\n",nsizeOptHeader);
+
+	IMAGE_OPTIONAL_HEADER32 *pIOH = (IMAGE_OPTIONAL_HEADER32 *)((char *)pIFH + sizeof(IMAGE_FILE_HEADER)); 
+	IMAGE_DATA_DIRECTORY *pIDD = pIOH->DataDirectory; 
+	IMAGE_DATA_DIRECTORY *pExport = &pIDD[0];
+
+	IMAGE_SECTION_HEADER *pISH = (IMAGE_SECTION_HEADER *)((char *)pIOH + nsizeOptHeader);
+
+	DWORD rva = pExport->VirtualAddress;
+	DWORD raw = 0;
+	for( int i = 0; i < nSections; i++,pISH++ ){
+		if( (rva >= pISH->VirtualAddress) && 
+			(rva <= pISH->VirtualAddress + pISH->SizeOfRawData)){
+				raw = pISH->PointerToRawData + rva - pISH->VirtualAddress;
+				break;
+		}
+	}
+
+	if( !raw ){
+		MessageBox("未找到导出表节区");
+		return -3;
+	}
+
+	IMAGE_EXPORT_DIRECTORY *pIMD = (IMAGE_EXPORT_DIRECTORY *)( buff + raw );
+
+	TRACE("export Base = %d,NumberOfFunctions = %d,NumberOfNames = %d\n",pIMD->Base,pIMD->NumberOfFunctions,pIMD->NumberOfNames );
+
+
+	DWORD *pname = (DWORD *)(buff + pIMD->AddressOfNames - rva + raw);
+	DWORD *paddr = (DWORD *)(buff + pIMD->AddressOfFunctions - rva + raw);
+	WORD *pidx = (WORD *)(buff + pIMD->AddressOfNameOrdinals - rva + raw);
+	
+	/*
+	for( int i = 0; i < pIMD->NumberOfNames; i++ ){
+		TRACE(*(pname + i) + buff - rva + raw);
+		TRACE("\n");
+
+	}*/
+
+
+	
+
+	char tbuff[256];
+	cmpret += "HOOK RET:\n";
+	
+
+	//先修重定位
+	DWORD reloc_size = pIOH->DataDirectory[5].Size;
+
+	DWORD Trva = pIOH->DataDirectory[5].VirtualAddress;
+	DWORD Traw = 0;
+
+	IMAGE_SECTION_HEADER *ptISH = pISH = (IMAGE_SECTION_HEADER *)((char *)pIOH + nsizeOptHeader);
+
+	for( int i = 0; i < nSections; i++,ptISH++ ){
+		if( (Trva >= ptISH->VirtualAddress) && 
+			(Trva <= ptISH->VirtualAddress + ptISH->SizeOfRawData)){
+				Traw = ptISH->PointerToRawData + Trva - ptISH->VirtualAddress;
+				break;
+		}
+	}
+
+	if( Traw == 0 ){
+		MessageBox("地址转换失败11");
+		return -4;
+	}
+
+	IMAGE_BASE_RELOCATION *pIBR = (IMAGE_BASE_RELOCATION *)(buff + Traw);
+
+	for( int of = 0; of < reloc_size; ){
+		DWORD virtualBase = pIBR->VirtualAddress;
+		Trva = virtualBase;
+		Traw = 0;
+		ptISH = pISH;
+
+
+		for( int i = 0; i < nSections; i++,ptISH++ ){
+			if( (Trva >= ptISH->VirtualAddress) && 
+				(Trva <= ptISH->VirtualAddress + ptISH->SizeOfRawData)){
+					Traw = ptISH->PointerToRawData + Trva - ptISH->VirtualAddress;
+					break;
+			}
+		}
+
+		if( Traw == 0 ){
+			MessageBox("地址转换失败22");
+			return -4;
+		}
+
+		int n = (pIBR->SizeOfBlock - 8)/2;
+		unsigned short *po = (unsigned short *)((char *)pIBR + sizeof(IMAGE_BASE_RELOCATION));
+		for( int i = 0; i < n; i++ ){
+
+			DWORD *fix_addr = (DWORD *)(buff + Traw + ((*po) & 0xfff));
+
+			//TRACE("<FIX %x>\n",virtualBase + ((*po) & 0xfff));
+
+			if( pIOH->ImageBase > (DWORD)dllbase ){
+				*fix_addr -= ( pIOH->ImageBase - (DWORD)dllbase );
+			}else{
+				*fix_addr += ( (DWORD)dllbase - pIOH->ImageBase );
+			}
+			po++;
+
+		}
+		of += pIBR->SizeOfBlock;
+		pIBR = (IMAGE_BASE_RELOCATION *)((char *)(pIBR) + pIBR->SizeOfBlock);
+	}
+
+
+
+
+
+	map<char*,DWORD>::iterator sub_iter = iter->second.begin();
+
+	pISH = (IMAGE_SECTION_HEADER *)((char *)pIOH + nsizeOptHeader);
+	DWORD raw_base = pISH->PointerToRawData - pISH->VirtualAddress;
+
+	char *text = new char[0x1000000];
+	
+	DWORD reS = pISH->SizeOfRawData<pISH->Misc.VirtualSize?pISH->SizeOfRawData:pISH->Misc.VirtualSize;
+	if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)(dllbase + pISH->VirtualAddress),text,reS,&nRead ) ){
+		int ret = GetLastError();
+		/*
+		DWORD old;
+		int ret = VirtualProtectEx( TargetHandle,(LPVOID)(dllbase + pISH->VirtualAddress),pISH->SizeOfRawData,PAGE_EXECUTE_READWRITE,&old);
+		ret = GetLastError();
+		if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)(dllbase + pISH->VirtualAddress),text,pISH->SizeOfRawData,&nRead ) ){
+			delete[] text;
+			return -10;
+		}
+		VirtualProtectEx( TargetHandle,(LPVOID)(dllbase + pISH->VirtualAddress),pISH->SizeOfRawData,old,&old);
+		*/
+		MessageBox("读取代码段错误");
+		//delete[] text;
+		//return -10;
+	}
+
+	while( sub_iter != iter->second.end() ){
+		char *targetStr = sub_iter->first;
+
+		int i = 0;
+		for( ; i < pIMD->NumberOfNames; i++ ){
+			//TRACE("%s\t%s\n",targetStr,(*(pname + i) + buff - rva + raw) );
+			if( !strcmp( targetStr,(*(pname + i) + buff - rva + raw) ) ){
+				WORD idx = *(pidx + i);
+				pIOH->ImageBase = pIOH->ImageBase;
+				DWORD oriAddr = *(paddr + idx) + dllbase;
+				
+				if( sub_iter->second != oriAddr ){
+					TRACE("IAT HOOK catch %s\t\t\t\t\t%x\t\t\t\t\tori: %x\n",sub_iter->first,sub_iter->second,oriAddr );
+					sprintf( tbuff,"%s\t\t\t\t\t%x\t\t\t\t\tori: %x\n\n",sub_iter->first,sub_iter->second,oriAddr );
+					cmpret += tbuff;
+				}else{
+					if( !strcmp(targetStr,"_commode") ){
+						TRACE("XXXXX\n");
+					}
+					DWORD ssraw = oriAddr - dllbase + raw_base;
+					DWORD va_of_text = oriAddr - dllbase - pISH->VirtualAddress;
+
+					if( va_of_text > pISH->SizeOfRawData || va_of_text > pISH->Misc.VirtualSize ){
+						TRACE("INLINE OUT %s\t\t\t\t\t\t\t%x\t\t\t\t\t\t\t\n",sub_iter->first,sub_iter->second );
+						break;
+					}
+					if( 0 != memcmp(buff + ssraw,text + va_of_text,5) ){
+						TRACE("INLINE HOOK %s\t\t\t\t\t\t\t%x\t\t\t\t\t\t\t",sub_iter->first,sub_iter->second );
+						for( int k = 0; k < 5; k++ ){
+							TRACE("%x ",*(unsigned char *)(text + va_of_text + k) );
+						}
+						TRACE("$$$");
+						for( int k = 0; k < 5; k++ ){
+							TRACE("%x ",*(unsigned char *)(buff + ssraw + k) );
+						}
+						TRACE("\n");
+						sprintf( tbuff,"INLINE HOOK catch %s\t\t\t\t\t\t\t%x\t\t\t\t\t\t\t\n\n",sub_iter->first,sub_iter->second );
+						cmpret += tbuff;
+						
+						sprintf( tbuff,"ORI BYTE: %x\n",*(unsigned char *)(buff + ssraw + 0));
+						
+						/*
+						sprintf( tbuff,"ORI BYTE: %x,%x,%x,%x,%x,%x,%x\n",*(unsigned char *)(buff + ssraw + 0),*(unsigned char *)(buff + ssraw + 1),
+							*(unsigned char *)(buff + ssraw + 2),*(unsigned char *)(buff + ssraw + 3,*(unsigned char *)(buff + ssraw + 4),
+							*(unsigned char *)(buff + ssraw + 5),*(unsigned char *)(buff + ssraw + 6) ) );
+						cmpret += tbuff;
+						*/
+					}
+				}
+					
+				break;
+			}
+		}
+
+		if( i == pIMD->NumberOfNames ){
+			TRACE("ERROR:not find %s\n",targetStr);
+		}
+
+		sub_iter++;
+	}
+
+	
+	
+	/*
+	sub_iter = iter->second.begin();
+	pname = (DWORD *)(buff + pIMD->AddressOfNames - rva + raw);
+	paddr = (DWORD *)(buff + pIMD->AddressOfFunctions - rva + raw);
+	pidx = (WORD *)(buff + pIMD->AddressOfNameOrdinals - rva + raw);
+
+	//必定在代码段
+
+
+	while( sub_iter != iter->second.end() ){
+		char *targetStr = sub_iter->first;
+
+		int i = 0;
+		for( ; i < pIMD->NumberOfNames; i++ ){
+			if( !strcmp( targetStr,(*(pname + i) + buff - rva + raw) ) ){
+				WORD idx = *(pidx + i);
+
+				DWORD oriRVA = *(paddr + idx);
+				
+
+
+				rva = oriRVA;
+				raw = rva + raw_base;
+				
+				if( 0 != memcmp(buff + raw,(char *)(sub_iter->second),7) ){
+					TRACE("%s\t\t\t\t\t%x\t\t\t\t\t",sub_iter->first,sub_iter->second );
+					for( int k = 0; k < 7; k++ ){
+						TRACE("%x ",*(unsigned char *)(sub_iter->second + k) );
+					}
+					TRACE("$$$");
+					for( int k = 0; k < 7; k++ ){
+						TRACE("%x ",*(unsigned char *)(buff + raw + k) );
+					}
+					TRACE("\n");
+				}
+
+		
+				if( sub_iter->second != oriAddr ){
+					TRACE("%s\t\t\t\t\t%x\t\t\t\t\tori: %x\n",sub_iter->first,sub_iter->second,oriAddr );
+					sprintf( buff,"%s\t\t\t\t\t%x\t\t\t\t\tori: %x\n",sub_iter->first,sub_iter->second,oriAddr );
+					cmpret += buff;
+				}
+
+				break;
+			}
+		}
+
+		if( i == pIMD->NumberOfNames ){
+			TRACE("ERROR:not find %s\n",targetStr);
+		}
+
+		sub_iter++;
+	}
+	*/
+
+
+
+
+	delete[] buff;
+	delete[] text;
+	return 0;
+}
+
+int Cwin32hpDlg::doScan( DWORD pid ){
+
+
+
+	TargetHandle = OpenProcess( PROCESS_ALL_ACCESS,0,pid );
+	if( INVALID_HANDLE_VALUE == TargetHandle )
+		return -1;
+
+	DWORD Teb = GetProcessTeb( TargetHandle,pid );
+	
+	if( !Teb ){
+		CloseHandle(TargetHandle);
+		return -2;
+	}
+
+	char buff[0x1000];
+	DWORD nRead;
+	if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)Teb,buff,64,&nRead ) ){
+		CloseHandle(TargetHandle);
+		return -3;
+	}
+
+	DWORD Peb = *(DWORD *)&buff[0x30];
+
+	if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)Peb,buff,64,&nRead ) ){
+		CloseHandle(TargetHandle);
+		return -4;
+	}
+
+	DWORD Ldr = *(DWORD *)&buff[0x0c];
+
+	if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)Ldr,buff,64,&nRead ) ){
+		CloseHandle(TargetHandle);
+		return -5;
+	}
+
+	DWORD iter = *(DWORD *)&buff[0x0c];
+
+	if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)iter,buff,sizeof(LDR_MODULE),&nRead ) ){
+		CloseHandle(TargetHandle);
+		return -6;
+	}
+	
+	int i = 0;
+
+
+	while( iter != Ldr + 0xc ){
+		LDR_MODULE p;
+		memcpy( &p,buff,sizeof(LDR_MODULE) );
+		DWORD BaseAddress = (DWORD)p.BaseAddress;
+
+		DWORD dllname = (DWORD)(p.FullDllName.Buffer);
+		DWORD len = p.FullDllName.Length;
+
+		if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)dllname,buff,len,&nRead ) ){
+			CloseHandle(TargetHandle);
+			return -7;
+		}
+		buff[len] = '\0';
+		buff[len + 1] = '\0';
+
+		CString name_str((wchar_t *)buff);
+		
+		char headbuff[0x1000];
+		if( 0 == i ){
+			if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)p.BaseAddress,headbuff,0x1000,&nRead ) ){
+				MessageBox("scan读取内存错误0");
+				CloseHandle(TargetHandle);
+				return -9;
+			}
+			TRACE("************BASE = %x   NAME = %s*********************\n",BaseAddress,name_str);
+			IMAGE_DOS_HEADER *pIDH = (IMAGE_DOS_HEADER *)headbuff;
+			IMAGE_FILE_HEADER *pIFH = (IMAGE_FILE_HEADER *)(headbuff + pIDH->e_lfanew + 4);
+
+			//节区的数量
+			int nSections = pIFH->NumberOfSections;
+			TRACE("%d\n",nSections);
+			//可选头部的大小
+			int nsizeOptHeader = pIFH->SizeOfOptionalHeader;
+			TRACE("%d\n",nsizeOptHeader);
+			
+			IMAGE_OPTIONAL_HEADER32 *pIOH = (IMAGE_OPTIONAL_HEADER32 *)((char *)pIFH + sizeof(IMAGE_FILE_HEADER)); 
+			
+			IMAGE_DATA_DIRECTORY *pIDD = pIOH->DataDirectory; 
+			IMAGE_DATA_DIRECTORY *pImport = &pIDD[1];
+
+			IMAGE_SECTION_HEADER *pISH = (IMAGE_SECTION_HEADER *)((char *)pIOH + nsizeOptHeader);
+
+			DWORD rva = pImport->VirtualAddress;
+
+			for( int o = 0; o < nSections; o++,pISH++ ){
+				if( (rva >= pISH->VirtualAddress) && 
+					(rva <= pISH->VirtualAddress + pISH->SizeOfRawData)){
+						break;
+				}
+			}
+			
+			TRACE("<导入表所在段大小为 %x>\n",pISH->SizeOfRawData );
+
+			//if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)((char *)(p.BaseAddress) + pImport->VirtualAddress),pebuff,pISH->SizeOfRawData,&nRead ) ){
+			if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)((char *)p.BaseAddress + pISH->VirtualAddress),pebuff,pISH->SizeOfRawData,&nRead ) ){
+				char ebuff[32];
+				sprintf(ebuff,"scan error1 %d",GetLastError());
+				MessageBox(ebuff);
+				CloseHandle(TargetHandle);
+				return -9;
+			}
+			
+			IMAGE_IMPORT_DESCRIPTOR *pIID = (IMAGE_IMPORT_DESCRIPTOR *)(pebuff + pImport->VirtualAddress - pISH->VirtualAddress);
+			
+			rva = pISH->VirtualAddress;
+			
+			int dllNum = 0;
+			while( 0 != pIID->Name ){
+				map<char*,DWORD> tmap;
+				char *dllName = pebuff + pIID->Name - rva;
+				
+				TRACE("---------------%s-----------------------\n",dllName);
+				if( !strcmp("ATL100.DLL",dllName) ){
+					pIID++;
+					dllNum++;
+					continue;
+				}
+				
+				DWORD *pfn_arr = (DWORD *)(pebuff + pIID->OriginalFirstThunk - rva);
+				DWORD *pfr_arr = (DWORD *)(pebuff + pIID->FirstThunk - rva);
+				
+				while( *pfn_arr ){
+					TRACE("%s\n",(char *)(pebuff + *pfn_arr - rva + 2));
+					tmap.insert( make_pair<char*,DWORD>((char *)(pebuff + *pfn_arr - rva + 2),*pfr_arr) );
+					pfn_arr++;
+					pfr_arr++;
+				}
+				
+				import_table_cache.insert(make_pair<char*,map<char*,DWORD> >(dllName,tmap) );
+				
+				pIID++;
+				dllNum++;
+			}
+
+			pIID -= dllNum;
+
+			i++;
+			
+			TRACE("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&\n");
+			map<char*,map<char*,DWORD> >::iterator iter = import_table_cache.begin();
+			while( iter != import_table_cache.end() ){
+				TRACE("##################%s#################\n",iter->first);
+				map<char*,DWORD>::iterator subiter = iter->second.begin();
+				while( subiter != iter->second.end() ){
+					TRACE( "%s\t\t%x\n",subiter->first,subiter->second );
+					subiter++;
+				}
+				iter++;
+			}
+		}else{
+			compareDll( name_str,BaseAddress,p.SizeOfImage,TargetHandle );
+
+		}
+		iter = (DWORD)(p.InLoadOrderModuleList.Flink);
+		if( 0 == ReadProcessMemory( TargetHandle,(LPCVOID)iter,buff,sizeof(LDR_MODULE),&nRead ) ){
+			CloseHandle(TargetHandle);
+			return -8;
+		}
+		
+	}
+
+	GetDlgItem(IDC_ED_CMP_RET)->SetWindowText(cmpret);
+	CloseHandle(TargetHandle);
 }
