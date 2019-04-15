@@ -436,3 +436,5 @@ int main(){
 
 	while(1);
 }
+//记一个小问题
+//对端如果不closesocket,直接关闭进程时对端是发的rst，因此服务端read -1
