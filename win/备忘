@@ -1,0 +1,13 @@
+.process 0x86a1b5e8
+kd> u ntdll!ZwReadFile
+ntdll!ZwReadFile:
+775f5700 b811010000      mov     eax,111h
+775f5705 ba0003fe7f      mov     edx,offset SharedUserData!SystemCallStub (7ffe0300)
+775f570a ff12            call    dword ptr [edx]
+775f570c c22400          ret     24h
+775f570f 90              nop
+ntdll!ZwReadFileScatter:
+775f5710 b812010000      mov     eax,112h
+775f5715 ba0003fe7f      mov     edx,offset SharedUserData!SystemCallStub (7ffe0300)
+775f571a ff12            call    dword ptr [edx]
+32位系统Zw调用的*(DWORD *)(funAddr + 1)就是系统调用号
