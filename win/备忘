@@ -11,3 +11,159 @@ ntdll!ZwReadFileScatter:
 775f5715 ba0003fe7f      mov     edx,offset SharedUserData!SystemCallStub (7ffe0300)
 775f571a ff12            call    dword ptr [edx]
 32位系统Zw调用的*(DWORD *)(funAddr + 1)就是系统调用号
+
+
+87910fb8 ( 0)          0        0      12807 Mapped       NO_ACCESS          Pagefile-backed section
+878c22d0 ( 5)         10       1f         0 Mapped       READWRITE          Pagefile-backed section
+85529eb0 ( 6)         20       2f         0 Mapped       READWRITE          Pagefile-backed section
+877fe880 ( 4)         30      22f         4 Private      READWRITE         
+873d2b58 ( 5)        230      233         0 Mapped       READONLY           Pagefile-backed section
+878ed628 ( 3)        240      240         1 Private      READWRITE         
+87468c18 ( 5)        250      2b6         0 Mapped       READONLY           \Windows\System32\locale.nls
+874b2a60 ( 4)        2c0      387         0 Mapped       READONLY           Pagefile-backed section
+877437a0 ( 6)        390      390         1 Private      READWRITE         
+87743700 ( 5)        3a0      3a0         1 Private      READWRITE         
+8783b6d0 ( 6)        3b0      3cf         1 Private      READWRITE         
+87278200 ( 2)        3d0      3df         5 Private      READWRITE         
+85fa6dc0 ( 5)        3e0      3e5         0 Mapped       READONLY           Pagefile-backed section
+8727dc60 ( 4)        3f0      3f0         0 Mapped       READWRITE          Pagefile-backed section
+8783b8d0 ( 5)        400      462         4 Mapped  Exe  EXECUTE_WRITECOPY  \Users\Lenovo\Desktop\fv.exe
+87743838 ( 3)        470      570         0 Mapped       READONLY           Pagefile-backed section
+872de6b0 ( 4)        5d0      60f        43 Private      READWRITE         
+8737b7d0 ( 1)        640      73f        36 Private      READWRITE         
+877437f0 ( 6)        740     133f         0 Mapped       READONLY           Pagefile-backed section
+87824948 ( 7)       1340     153f         3 Private      READWRITE         
+87912250 ( 5)       1930     225f         0 Mapped       READONLY           \Windows\Fonts\StaticCache.dat
+87912370 ( 6)       2260     233e         0 Mapped       READONLY           Pagefile-backed section
+8791afe0 ( 7)       2340     23bf         1 Private      READWRITE         
+87918fe0 ( 4)       2400     243f        14 Private      READWRITE         
+8727dc18 ( 7)       2440     2837         0 Mapped       READONLY           Pagefile-backed section
+8727dd38 ( 6)       2840     2b0e         0 Mapped       READONLY           \Windows\Globalization\Sorting\SortDefault.nls
+877fd868 ( 7)       2b10     2f0f         0 Mapped       READONLY           Pagefile-backed section
+87743580 ( 5)      73c80    73c92         3 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\dwmapi.dll
+87862810 ( 6)      73fb0    73fef         3 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\uxtheme.dll
+8727db18 ( 7)      75560    7556b         2 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\cryptbase.dll
+877fd5f0 ( 3)      75830    75879         3 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\KernelBase.dll
+87743888 ( 6)      75ab0    75b4f         5 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\advapi32.dll
+8726e3a0 ( 5)      75b50    75b59         2 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\lpk.dll
+87916538 ( 7)      75ca0    75dfb         5 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\ole32.dll
+86868140 ( 6)      75e00    75e9c         3 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\usp10.dll
+874cbd98 ( 4)      75ea0    75f4b         8 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\msvcrt.dll
+878eed18 ( 6)      75f50    76023         2 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\kernel32.dll
+874adbb0 ( 7)      76030    760fb         3 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\msctf.dll
+873db340 ( 5)      76100    7611e         2 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\imm32.dll
+8729c698 ( 7)      76120    761ae         3 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\oleaut32.dll
+877ff6b8 ( 6)      76270    76310         2 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\rpcrt4.dll
+87743750 ( 7)      76510    765d8         2 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\user32.dll
+877fb5c0 ( 2)      774c0    775fb         9 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\ntdll.dll
+877fd128 ( 6)      77600    77618         4 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\sechost.dll
+874a3598 ( 5)      77620    7766d         3 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\gdi32.dll
+86a59120 ( 4)      77700    77700         0 Mapped  Exe  EXECUTE_WRITECOPY  \Windows\System32\apisetschema.dll
+879052c8 ( 5)      7f6f0    7f7ef         0 Mapped       READONLY           Pagefile-backed section
+877fa4b8 ( 3)      7ffa0    7ffd2         0 Mapped       READONLY           Pagefile-backed section
+8777f3b8 ( 5)      7ffdd    7ffdd         1 Private      READWRITE         
+87282b98 ( 4)      7ffde    7ffde         1 Private      READWRITE         
+878dc688 ( 5)      7ffdf    7ffdf         1 Private      READWRITE  
+
+
+
+
+
+
+
+
+
+FIND TARGETTotal = 32		87910d40
+ADDR = 87910fb8		start =        0		end =        0		3207
+87918fe0
+ADDR = 8737b7d0		start =      640		end =      73f		84000024
+ADDR = 87278200		start =      3d0		end =      3df		84000005
+ADDR = 878ed628		start =      240		end =      240		84800001
+ADDR = 877fe880		start =       30		end =      22f		84000004
+ADDR = 878c22d0		start =       10		end =       1f		4000000
+0
+ADDR = 85529eb0		start =       20		end =       2f		4000000
+0
+ADDR = 873d2b58		start =      230		end =      233		1080000
+0
+ADDR = 874b2a60		start =      2c0		end =      387		1080000
+0
+ADDR = 87468c18		start =      250		end =      2b6		1080000
+0
+ADDR = 87743700		start =      3a0		end =      3a0		84880001
+ADDR = 877437a0		start =      390		end =      390		84880001
+ADDR = 8783b6d0		start =      3b0		end =      3cf		84000001
+ADDR = 87743838		start =      470		end =      570		1080000
+0
+ADDR = 8727dc60		start =      3f0		end =      3f0		4080000
+0
+ADDR = 85fa6dc0		start =      3e0		end =      3e5		1080000
+0
+ADDR = 8783b8d0		start =      400		end =      462		7200004
+400000
+ADDR = 872de6b0		start =      5d0		end =      60f		8400002b
+ADDR = 877fb5c0		start =    774c0		end =    775fb		7200009
+774c0000
+ADDR = 877fd5f0		start =    75830		end =    75879		7200003
+75830000
+ADDR = 87918fe0		start =     2400		end =     243f		8400000e
+ADDR = 87912250		start =     1930		end =     225f		1000000
+0
+ADDR = 877437f0		start =      740		end =     133f		1080000
+0
+ADDR = 87824948		start =     1340		end =     153f		84000003
+ADDR = 87912370		start =     2260		end =     233e		1000000
+0
+ADDR = 8791afe0		start =     2340		end =     23bf		84000001
+ADDR = 87743580		start =    73c80		end =    73c92		7200003
+73c80000
+ADDR = 8727dd38		start =     2840		end =     2b0e		1000000
+0
+ADDR = 8727dc18		start =     2440		end =     2837		1080000
+0
+ADDR = 877fd868		start =     2b10		end =     2f0f		1080000
+0
+ADDR = 87862810		start =    73fb0		end =    73fef		7200003
+73fb0000
+ADDR = 8727db18		start =    75560		end =    7556b		7200002
+75560000
+ADDR = 874cbd98		start =    75ea0		end =    75f4b		7200008
+75ea0000
+ADDR = 8726e3a0		start =    75b50		end =    75b59		7200002
+75b50000
+ADDR = 87743888		start =    75ab0		end =    75b4f		7200005
+75ab0000
+ADDR = 86868140		start =    75e00		end =    75e9c		7200003
+75e00000
+ADDR = 87916538		start =    75ca0		end =    75dfb		7200005
+75ca0000
+ADDR = 873db340		start =    76100		end =    7611e		7200002
+76100000
+ADDR = 878eed18		start =    75f50		end =    76023		7200002
+75f50000
+ADDR = 874adbb0		start =    76030		end =    760fb		7200003
+76030000
+ADDR = 877ff6b8		start =    76270		end =    76310		7200002
+76270000
+ADDR = 8729c698		start =    76120		end =    761ae		7200003
+76120000
+ADDR = 87743750		start =    76510		end =    765d8		7200002
+76510000
+ADDR = 877fa4b8		start =    7ffa0		end =    7ffd2		1080000
+0
+ADDR = 86a59120		start =    77700		end =    77700		7200000
+776f0000
+ADDR = 874a3598		start =    77620		end =    7766d		7200003
+77620000
+ADDR = 877fd128		start =    77600		end =    77618		7200004
+77600000
+ADDR = 879052c8		start =    7f6f0		end =    7f7ef		1080000
+0
+ADDR = 87282b98		start =    7ffde		end =    7ffde		84880001
+ADDR = 8777f3b8		start =    7ffdd		end =    7ffdd		84880001
+ADDR = 878dc688		start =    7ffdf		end =    7ffdf		84880001
+
+
+这里最后一个数据是_MMVAD.u
+明显低2字节是mapped
+最高位标识是否Private
