@@ -1,6 +1,7 @@
 #include "ntddk.h"
 #include <windef.h>
 #include <ntimage.h>
+//#include <ntifs.h>
 
 //3级表,32位地址
 unsigned int vir2phy3_32( unsigned int pgd, unsigned int vir ){
@@ -43,7 +44,7 @@ unsigned int vir2phy3_32( unsigned int pgd, unsigned int vir ){
 		DbgPrint("[DDK-->vir2phy:MmMapIoSpace fail1]\n");
 		return 0;
 	}
-
+	
 	//次高9位
 	pud_offset = ((vir >> 21) & 0x1ff);
 	tmp = *(ppud + pud_offset * 2);
@@ -107,6 +108,7 @@ PEPROCESS getProcess( unsigned pid ){
 	}while( process != firstProcess  );
 
 	return NULL;
+	
 	/*
 	kprocess = (PKPROCESS)process;
 	pgd = *(unsigned *)((char *)kprocess + 0x18);
@@ -227,6 +229,7 @@ KIRQL Irql;
 
 typedef struct _SSDTInformation
 {
+	
 	ULONG index;
 	ULONG CurrentAddress;
 	ULONG OriginalAddress;
@@ -238,7 +241,6 @@ PSSDTInformation SSDT = NULL;
 
 VOID SetNewSSDT(PVOID pNewImage)
 {
-
 	ULONG              uIndex;
 	ULONG              uNewKernelInc,uOffset;
 	//新内核地址-老内核地址，得到相对偏移
@@ -265,7 +267,7 @@ VOID SetNewSSDT(PVOID pNewImage)
 		KdPrint(("pNewSSDT->ServiceTableBase: %X",pNewSSDT->ServiceTableBase));
 		return;
 	}
-
+	
 	//依次遍历
 	for (uIndex = 0;uIndex<pNewSSDT->NumberOfServices;uIndex++)
 	{  //新的函数地址再加上相对加载地址，得到现在的ssdt函数地址
@@ -495,10 +497,10 @@ int GetSSDTName()
 			uServerIndex = *(PULONG)((ULONG)pFuncAddr + 1);
 			FunName[0] = 'N';
 			FunName[1] = 't';
-			//KdPrint(("序列号为：%d,函数名为: %s\n", uServerIndex, FunName));
-			RtlCopyMemory(SSDT[uServerIndex].FunctionName,FunName,sizeof(char)*15);  //保存函数名
+			KdPrint(("序列号为：%d,函数名为: %s\n", uServerIndex, FunName));
+			//RtlCopyMemory(SSDT[uServerIndex].FunctionName,FunName,sizeof(char)*15);  //保存函数名
 			SSDT[uServerIndex].KernelMouduleBase=OldImageBase;  //保存内核模块基址
-			RtlCopyMemory(SSDT[uServerIndex].KernelMouduleName,NtosVersionNameA[NtosVersion],sizeof(char)*63);  //保存内核模块名
+			//RtlCopyMemory(SSDT[uServerIndex].KernelMouduleName,NtosVersionNameA[NtosVersion],sizeof(char)*63);  //保存内核模块名
 
 		}
 
@@ -622,27 +624,108 @@ int LoadKernel()
 	return 0;
 }
 
-
-NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,PUNICODE_STRING RegistryPath) 
+VOID ppnr( 
+	IN HANDLE ParentId, 
+	IN HANDLE ProcessId, 
+	IN BOOLEAN Create )
 {
+	DbgPrint("ParentId = %x\n",ParentId);
+	DbgPrint("ProcessId = %x\n",ProcessId);
+	return;
+}
 
-	NTSTATUS status = STATUS_SUCCESS;
+VOID pinr(
+	__in PUNICODE_STRING FullImageName,
+	__in HANDLE ProcessId,
+	__in PIMAGE_INFO ImageInfo
+	)
+{
+	DbgPrint("%ws\n",FullImageName->Buffer);
+	DbgBreakPoint();
+	__asm{
+		nop
+	}
+	return;
+}
+
+void setCallBack(){
+
+	PsSetLoadImageNotifyRoutine(pinr);
+	PsSetCreateProcessNotifyRoutine(ppnr,0);
+	/*
+	if( !NT_SUCCESS() ){
+		DbgPrint("Set CallBack fail\n");
+	}*/
+}
+
+typedef NTSTATUS(*ZwCSFormat)(	OUT PHANDLE SectionHandle,
+	IN ACCESS_MASK DesiredAccess,
+	IN POBJECT_ATTRIBUTES ObjectAttributes OPTIONAL,
+	IN PLARGE_INTEGER MaximumSize OPTIONAL,
+	IN ULONG SectionPageProtection,
+	IN ULONG AllocationAttributes,
+	IN HANDLE FileHandle OPTIONAL);
+
+ZwCSFormat oriZwCreateSection;
+
+NTSTATUS Fake_ZwCreateSection(
+	OUT PHANDLE SectionHandle,
+	IN ACCESS_MASK DesiredAccess,
+	IN POBJECT_ATTRIBUTES ObjectAttributes OPTIONAL,
+	IN PLARGE_INTEGER MaximumSize OPTIONAL,
+	IN ULONG SectionPageProtection,
+	IN ULONG AllocationAttributes,
+	IN HANDLE FileHandle OPTIONAL)
+{
+	PFILE_OBJECT    FileObject;
+	POBJECT_NAME_INFORMATION wcFilePath;
+	HANDLE            ProcessID;
+
+	ProcessID=PsGetCurrentProcessId();
+
+#if 1
+	if (AllocationAttributes & 0x1000000 )
+	{
+		if (NT_SUCCESS(ObReferenceObjectByHandle(FileHandle, 0,NULL,KernelMode, (PVOID *)&FileObject,NULL)))
+		{
+			DbgPrint("ProcessID:0x%08X %ws\r\n",ProcessID,FileObject->FileName.Buffer);
+			/*
+			if (IoQueryFileDosDeviceName(FileObject,&wcFilePath)==STATUS_SUCCESS)
+			{
+				DbgPrint("ProcessID:0x%08X %ws\r\n", ProcessID,wcFilePath->Name.Buffer);
+			}
+			else
+			{
+
+			}*/
+			ObDereferenceObject(FileObject);
+			//ExFreePool(wcFilePath);
+		}else{
+			DbgPrint(("ProcessID:0x%08X--FileHandle:0x%08X\r\n", ProcessID,FileHandle));
+		}
+	}
+#endif
+	return oriZwCreateSection(SectionHandle, DesiredAccess,ObjectAttributes,MaximumSize,SectionPageProtection, AllocationAttributes,FileHandle);    
+}   
+
+void printSSDT(){
 	int i = 0;
-	
-	DbgPrint("[DDK:In Driver Entry]\n");
 
-	
+	//获取内核exe文件
 	if( !NT_SUCCESS(GetKernelModuleInfo()) ){
 		DbgPrint("GetKernelModuleInfo Error\n");
-		return status;
+		return;
 	}
 
+	//读取内核exe文件并调用setnewssdt
 	if( LoadKernel() ){
-		return status;
+		DbgPrint("LoadKernel Error\n");
+		return;
 	}
 
 	if( GetSSDTName() ){
-		return status;
+		DbgPrint("GetSSDTName Error\n");
+		return;
 	}
 
 	for(;i<SSDTNumber;i++)
@@ -650,9 +733,216 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,PUNICODE_STRING RegistryPath)
 		DbgPrint("id:%d 当前地址:%08x 原始地址:%08x 函数名:%s\n",
 			SSDT[i].index,SSDT[i].CurrentAddress,SSDT[i].OriginalAddress,SSDT[i].FunctionName);
 	}
+}
+
+void hookCreateSection(){
+	DbgPrint("KeServiceDescriptorTable's Addr = %x\n",KeServiceDescriptorTable.ServiceTableBase[0x54]);
+
+	__asm
+	{
+		cli ;//将处理器标志寄存器的中断标志位清0，不允许中断
+		mov eax, cr0
+			and  eax, ~0x10000
+			mov cr0, eax
+	}
 
 
+
+	oriZwCreateSection = (ZwCSFormat)KeServiceDescriptorTable.ServiceTableBase[0x54];
+	KeServiceDescriptorTable.ServiceTableBase[0x54] = (DWORD)Fake_ZwCreateSection;
+
+	// 恢复写保护
+	__asm
+	{
+		mov  eax, cr0
+			or     eax, 0x10000
+			mov  cr0, eax
+			sti ;//将处理器标志寄存器的中断标志置1，允许中断
+	}
+
+	DbgPrint("KeServiceDescriptorTable's Addr = %x\n",KeServiceDescriptorTable.ServiceTableBase[0x54]);
+}
+
+
+typedef struct _MMADDRESS_NODE {
+	union {
+		DWORD Balance : 2;
+		struct _MMADDRESS_NODE *Parent;
+	} u1;
+	struct _MMADDRESS_NODE *LeftChild;
+	struct _MMADDRESS_NODE *RightChild;
+	DWORD StartingVpn;
+	DWORD EndingVpn;
+} MMADDRESS_NODE, *PMMADDRESS_NODE;
+
+typedef struct _MM_AVL_TABLE {
+	MMADDRESS_NODE  BalancedRoot;
+	DWORD DepthOfTree: 5;
+	DWORD Unused: 3;
+	DWORD NumberGenericTableElements: 24;
+	PVOID NodeHint;
+	PVOID NodeFreeHint;
+} MM_AVL_TABLE, *PMM_AVL_TABLE;
+
+
+
+typedef struct _EX_FAST_REF
+{
+	union{
+		PVOID Object;
+		ULONG RefCnt : 4;
+		ULONG Value;
+	};
+}EX_FAST_REF,*PEX_FAST_REF;
+
+struct _SEGMENT
+{
+	struct _CONTROL_AREA*  ControlArea;
+	ULONG TotalNumberOfPtes;
+	ULONG SegmentFlags;
+	ULONG NumberOfCommittedPages;
+	ULONG64 SizeOfSegment;
+
+	void* BasedAddress;
+
+	DWORD SegmentLock;
+	ULONG u1;
+	ULONG u2;
+	DWORD*  PrototypePte;
+	ULONG ThePtes[0x1];
+};
+
+struct  _CONTROL_AREA
+{
+	struct _SEGMENT* Segment;
+	struct  _LIST_ENTRY  DereferenceList;
+	ULONG NumberOfSectionReferences;
+	ULONG NumberOfPfnReferences;
+	ULONG NumberOfMappedViews;
+	ULONG NumberOfUserReferences;
+	ULONG u;
+	ULONG  FlushInProgressCount;
+	struct  _EX_FAST_REF FilePointer;
+};
+
+struct _SUBSECTION
+{
+	struct  _CONTROL_AREA*  ControlArea;
+	DWORD* SubsectionBase;
+	struct _SUBSECTION*  NextSubsection;
+	ULONG  PtesInSubsection;
+	//ULONG  UnusedPtes;
+	struct  _MM_AVL_TABLE*  GlobalPerSessionHead;
+	DWORD  u; 
+	ULONG  StartingSector;
+	ULONG  NumberOfFullSectors;
+};
+
+
+
+typedef struct _MMVAD
+{
+	DWORD  u1; 
+	struct _MMVAD* LeftChild;
+	struct _MMVAD*  RightChild;
+	DWORD StartingVpn;
+	DWORD EndingVpn;
+	DWORD u;
+	DWORD PushLock;
+	DWORD u5;
+	DWORD u2;
+	struct _SUBSECTION* Subsection;
+	//struct _MSUBSECTION* MappedSubsection;
+	DWORD* FirstPrototypePte;
+	DWORD* LastContiguousPte;
+	struct _LIST_ENTRY ViewLinks;
+	PEPROCESS VadsProcess;
+}MMVAD;
+
+
+
+void PrintVad( MMVAD *T ){
+
+	DWORD tmp = (DWORD)T;
+	DbgPrint("ADDR = %8x\t\tstart = %8x\t\tend = %8x\t\t%x\n",tmp, T->StartingVpn, T->EndingVpn, T->u );
+
+	if( T->StartingVpn != 0 ){
+		
+
+		tmp = *(DWORD *)(tmp + 0x24);
+
+		if(MmIsAddressValid((PVOID)tmp)){
+			tmp = *(DWORD *)(tmp);
+			if(MmIsAddressValid((PVOID)tmp)){
+				tmp = *(DWORD *)(tmp);
+				if(MmIsAddressValid((PVOID)tmp)){
+					tmp = *(DWORD *)(tmp + 0x18);
+					DbgPrint("%x\n",tmp);
+				}
+			}
+		}
+
+		//tmp = *(DWORD *)(tmp + 0x24);
+		//tmp = *(DWORD *)(tmp + 0x10);
+		//tmp = *(DWORD *)(tmp + 0x38);
+		
+		//tmp = *(DWORD *)(tmp);
+		//tmp = *(DWORD *)(tmp + 0x18);
+		
+		
+		//DbgPrint("%8x\n",T->Subsection->ControlArea->Segment->BasedAddress);
+	}else{
+		DbgPrint("%8x\n",*(DWORD *)((char *)T + 0x18));
+	}
+	if( NULL != T->LeftChild ){
+		PrintVad( T->LeftChild );
+	}
+
+	if( NULL != T->RightChild ){
+		PrintVad( T->RightChild );
+	}
+
+	
+}
+
+
+void PrintProcessVad( DWORD pid ){
+
+	PEPROCESS p;
+	PMM_AVL_TABLE pRoot;
+
+	p = getProcess(2428);
+
+	//获取AVL根
+	pRoot = (PMM_AVL_TABLE)((char *)p + 0x278);
+
+	PrintVad( (MMVAD *)pRoot );
+}
+
+NTSTATUS Unload( struct _DRIVER_OBJECT *DriverObject ){
+
+	DbgPrint("[DDK:Driver Unload]\n");
+	return STATUS_SUCCESS;
+}
+
+
+NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject,PUNICODE_STRING RegistryPath) 
+{
+	
+	NTSTATUS status = STATUS_SUCCESS;
+	unsigned char cmd = 0xed;
+	unsigned char data = 0x07;
+	unsigned char port;
+
+	DriverObject->DriverUnload = Unload;
+
+	DbgPrint("[DDK:In Driver Entry]\n");
+
+
+	WRITE_PORT_UCHAR( &port,cmd);
+	WRITE_PORT_UCHAR( &port,data);
 
 	DbgPrint("[DDK:Leave Driver Entry]\n");
+
 	return status; 
 }
