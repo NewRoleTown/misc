@@ -1,3 +1,5 @@
+:1,2s/^\(.\)/a\1/g正则把1，2行中任意开头前加a
+
 .process 0x86a1b5e8
 kd> u ntdll!ZwReadFile
 ntdll!ZwReadFile:
