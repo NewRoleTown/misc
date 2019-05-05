@@ -1,0 +1,20 @@
+全局变量
+struct rcu_ctrlblk {  
+    long cur;               当前的grace-period  
+    long completed;         已经完成的grace-period
+    cpumask_t  cpumask;   
+};
+completed < cur时认为还有未决的rcu写阻塞
+per-cpu变量
+struct rcu_data {  
+    long quiescbatch;       
+    int passed_quiesc;  
+    long            batch;           
+    struct rcu_head *nxtlist;  
+    struct rcu_head **nxttail;  
+    struct rcu_head *curlist;  
+    struct rcu_head **curtail;  
+    struct rcu_head *donelist;  
+    struct rcu_head **donetail;  
+};
+completed > batch认为rcu完成
