@@ -1,11 +1,15 @@
+__USER_DS
+
 cr0的PG(31)位开启分页
 	PE(0)位开启保护模式
 	CacheDisable(30)
 	WriteProtect(16)
-NowWriteThrought(29)
+	NowWriteThrought(29) 置1通写，写缓存时也写内存
 
 	cr3页目录基址寄存器
 	cr4中PGE和页表global相关,用于不从tlb缓存中刷出
+
+pgd pud总在主存中
 
 64位系统使用48位地址(9+9+9+9+12)
 
@@ -30,7 +34,7 @@ NowWriteThrought(29)
 	//x86可读便可执行，PAE或x64才有nx
 #define _PAGE_BIT_RW		1
 #define _PAGE_BIT_USER		2
-	//write-throughi:写内存和写缓存同步
+	//write-through:写内存和写缓存同步
 	//write-back:只改缓存，刷缓存才写回去
 #define _PAGE_BIT_PWT		3
 	//是否对该页启用高速缓存
@@ -38,6 +42,7 @@ NowWriteThrought(29)
 #define _PAGE_BIT_ACCESSED	5
 #define _PAGE_BIT_DIRTY		6
 	//仅用于页目录项
+	//页表项的意义是 内核将内存中存在但是没有读写执行权限的页给上这个标记
 #define _PAGE_BIT_PSE		7	/* 4 MB (or 2MB) page, Pentium+, if present.. */
 	//仅用于页表项
 #define _PAGE_BIT_GLOBAL	8	/* Global TLB entry PPro+ */
@@ -70,8 +75,7 @@ NowWriteThrought(29)
 #define _PAGE_NX	0
 #endif
 
-	pte_t用于页表项
-
+pte_t用于页表项
 #define pte_present(x)	((x).pte_low & (_PAGE_PRESENT | _PAGE_PROTNONE))
 
 #define pte_index(address) \
@@ -111,7 +115,7 @@ NowWriteThrought(29)
 		((unlikely(!pmd_present(*(pmd))) && __pte_alloc(mm, pmd, address))? \
 		 NULL: pte_offset_map(pmd, address))
 
-	//根据配置可以选择页表是否可存HIHG内存
+	//根据配置可以选择页表是否可存HIGH内存
 struct page *pte_alloc_one(struct mm_struct *mm, unsigned long address)
 {
 	struct page *pte;
@@ -143,6 +147,27 @@ static pmd_t *pmd_cache_alloc(int idx)
 		pmd = kmem_cache_alloc(pmd_cache, GFP_KERNEL);
 
 	return pmd;
+}
+
+static void pgd_ctor(struct mm_struct *mm, pgd_t *pgd)
+{
+	/* If the pgd points to a shared pagetable level (either the
+	   ptes in non-PAE, or shared PMD in PAE), then just copy the
+	   references from swapper_pg_dir. */
+	if (PAGETABLE_LEVELS == 2 ||
+	    (PAGETABLE_LEVELS == 3 && SHARED_KERNEL_PMD) ||
+	    PAGETABLE_LEVELS == 4) {
+		//2level时将内核部分复制
+		clone_pgd_range(pgd + KERNEL_PGD_BOUNDARY,
+				swapper_pg_dir + KERNEL_PGD_BOUNDARY,
+				KERNEL_PGD_PTRS);
+	}
+
+	/* list required to sync kernel mapping updates */
+	if (!SHARED_KERNEL_PMD) {
+		pgd_set_mm(pgd, mm);
+		pgd_list_add(pgd);
+	}
 }
 
 pgd_t *pgd_alloc(struct mm_struct *mm)
@@ -181,7 +206,7 @@ out_oom:
 	return NULL;
 }
 
-//页表的快速分配
+//页的快速分配
 /*
  * Specifying a NULL ctor can remove constructor support. Specifying
  * a constant quicklist allows the determination of the exact address
@@ -198,6 +223,7 @@ static inline void *quicklist_alloc(int nr, gfp_t flags, void (*ctor)(void *))
 	q =&get_cpu_var(quicklist)[nr];
 	p = q->page;
 	if (likely(p)) {
+		//p[0]是下一个页的地址
 		q->page = p[0];
 		p[0] = NULL;
 		q->nr_pages--;
@@ -611,7 +637,7 @@ static void __init kernel_physical_mapping_init(pgd_t *pgd_base)
 	for (; pgd_idx < PTRS_PER_PGD; pgd++, pgd_idx++) {
 		//32位非pae直接返回pgd
 		pmd = one_md_table_init(pgd);
-		//只映射低端内存
+		//只映射低端内存(32位896)
 		if (pfn >= max_low_pfn)
 			continue;
 		for (pmd_idx = 0; pmd_idx < PTRS_PER_PMD && pfn < max_low_pfn; pmd++, pmd_idx++) {
