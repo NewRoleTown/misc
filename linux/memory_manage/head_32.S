@@ -204,11 +204,9 @@ default_entry:
 	jb 10b
 	//保存最小可用地址
 	movl %edi,(init_pg_tables_end - __PAGE_OFFSET)
-
-	/* Do an early initialization of the fixmap area */
-	//倒数第1个页目录项设置成swapper_pg_pmd的地址
 	movl $(swapper_pg_dir - __PAGE_OFFSET), %edx
 	movl $(swapper_pg_pmd - __PAGE_OFFSET), %eax
+	//倒数第2个页目录项设置成swapper_pg_pmd的地址
 	addl $0x67, %eax			/* 0x67 == _PAGE_TABLE */
 	movl %eax, 4092(%edx)
 

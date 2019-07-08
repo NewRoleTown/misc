@@ -15,6 +15,11 @@ pgd pud总在主存中
 
 	各个CPU的TLB不必同步，而CACHE要同步
 
+启动顺序:
+1 default_entry(此时还未开启分页，临时表在这里完成)
+2 主cpu调用start_kernel
+	 
+
 #define VMALLOC_OFFSET	(8*1024*1024)
 #define VMALLOC_START	(((unsigned long) high_memory + \
 			2*VMALLOC_OFFSET-1) & ~(VMALLOC_OFFSET-1))
@@ -603,6 +608,8 @@ static unsigned long __init setup_memory(void)
 
 
 之后paging_init初始化页表
+固定映射也在这里初始化
+ 
 /*
  * paging_init() sets up the page tables - note that the first 8MB are
  * already mapped by head.S.
@@ -676,9 +683,10 @@ static void __init pagetable_init (void)
 	 */
 	vaddr = __fix_to_virt(__end_of_fixed_addresses - 1) & PMD_MASK;
 	end = (FIXADDR_TOP + PMD_SIZE - 1) & PMD_MASK;
-	//范围地址分配页表(不分配具体页面)
+	//范围地址分配表(pmd)(不分配具体页面)
 	page_table_range_init(vaddr, end, pgd_base);
 
+	//固定映射
 	permanent_kmaps_init(pgd_base);
 
 	paravirt_pagetable_setup_done(pgd_base);
