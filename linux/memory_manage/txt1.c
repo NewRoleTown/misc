@@ -6,6 +6,7 @@
 
 选择子的值在asm/segment.h文件中定义
 
+	printf("reply %s\n",reply->element[0]->str);
 
 
 enum zone_type {
@@ -131,6 +132,7 @@ struct zone {
 	/* see spanned/present_pages for more description */
 	seqlock_t		span_seqlock;
 #endif
+	//buddy
 	struct free_area	free_area[MAX_ORDER];
 
 #ifndef CONFIG_SPARSEMEM
@@ -268,6 +270,7 @@ typedef enum {
  * 16384MB:	16384k
  */
 计算内存水印及保留内存
+保留内存(pages_min数量)用于给不允许睡眠的内存分配使用(如GFP_ATOMIC)
 static int __init init_per_zone_pages_min(void)
 {
 	unsigned long lowmem_kbytes;
@@ -302,6 +305,7 @@ static int __init init_per_zone_pages_min(void)
 struct page {
 	unsigned long flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
+	//无引用的页是-1,page_count返回这个字段+1
 	atomic_t _count;		/* Usage count, see below. */
 	union {
         //映射的页表项计数,用于限制逆向映射

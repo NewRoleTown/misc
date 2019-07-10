@@ -261,9 +261,54 @@ void __init mem_init(void)
 
 initmem在kernel_start结束时释放给伙伴系统
 
+static int pkmap_count[LAST_PKMAP];
 
 PKMAP_BASE到FIXADDR_START用于持久映射
 pkmap_count数组是持久映射页的计数器,为0可用，为1表示没人用但还未刷新TLB
+
+void *kmap(struct page *page)
+{
+	might_sleep();
+	if (!PageHighMem(page))
+		return page_address(page);
+	return kmap_high(page);
+}
+
+void kunmap(struct page *page)
+{
+	if (in_interrupt())
+		BUG();
+	if (!PageHighMem(page))
+		return;
+	kunmap_high(page);
+}
+
+void *page_address(struct page *page)
+{
+	unsigned long flags;
+	void *ret;
+	struct page_address_slot *pas;
+
+	if (!PageHighMem(page))
+		return lowmem_page_address(page);
+
+	pas = page_slot(page);
+	ret = NULL;
+	spin_lock_irqsave(&pas->lock, flags);
+	if (!list_empty(&pas->lh)) {
+		struct page_address_map *pam;
+
+		list_for_each_entry(pam, &pas->lh, list) {
+			if (pam->page == page) {
+				ret = pam->virtual;
+				goto done;
+			}
+		}
+	}
+done:
+	spin_unlock_irqrestore(&pas->lock, flags);
+	return ret;
+}
 
 struct page_address_map {
 	struct page *page;
@@ -276,6 +321,7 @@ static struct page_address_slot *page_slot(struct page *page)
 	return &page_address_htable[hash_ptr(page, PA_HASH_ORDER)];
 }
 
+中断处理和可延迟函数不可调用kmap
 void fastcall *kmap_high(struct page *page)
 {
 	unsigned long vaddr;

@@ -76,6 +76,7 @@ found:
 
 	return area;
 
+	printf("reply %s\n",reply->element[0]->str);
 out:
 	write_unlock(&vmlist_lock);
 	kfree(area);
