@@ -57,6 +57,13 @@ enum zone_type {
 	MAX_NR_ZONES
 };
 
+struct per_cpu_pages {
+	int count;		/* number of pages in the list */
+	int high;		/* high watermark, emptying needed */
+	int batch;		/* chunk size for buddy add/remove */
+	struct list_head list;	/* the list of pages */
+};
+
 //节点
 typedef struct pglist_data {
     //节点下的zone
