@@ -37,3 +37,7 @@ find_get_page
 unlock_page
 add_to_page_cache
 
+grow_buffers
+一个缓冲区页中可以包含多个块缓存
+
+background_writeout

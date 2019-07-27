@@ -323,6 +323,7 @@ struct page {
 	};
 	union {
 	    struct {
+		//页中是块缓存时，这个字段指向块缓冲头部
 		unsigned long private;		/* Mapping-private opaque data:
 					 	 * usually used for buffer_heads
 						 * if PagePrivate set; used for

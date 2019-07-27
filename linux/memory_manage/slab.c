@@ -404,3 +404,277 @@ void __init kmem_cache_init(void)
 	 * of the kernel is not yet operational.
 	 */
 }
+
+
+//分配新的slab
+static int cache_grow(struct kmem_cache *cachep,
+		gfp_t flags, int nodeid, void *objp)
+{
+	struct slab *slabp;
+	size_t offset;
+	gfp_t local_flags;
+	struct kmem_list3 *l3;
+
+	/*
+	 * Be lazy and only check for valid flags here,  keeping it out of the
+	 * critical path in kmem_cache_alloc().
+	 */
+	BUG_ON(flags & GFP_SLAB_BUG_MASK);
+	local_flags = flags & (GFP_CONSTRAINT_MASK|GFP_RECLAIM_MASK);
+
+	/* Take the l3 list lock to change the colour_next on this node */
+	check_irq_off();
+	l3 = cachep->nodelists[nodeid];
+	spin_lock(&l3->list_lock);
+
+	/* Get colour for the slab, and cal the next value. */
+	offset = l3->colour_next;
+	l3->colour_next++;
+	if (l3->colour_next >= cachep->colour)
+		l3->colour_next = 0;
+	spin_unlock(&l3->list_lock);
+
+	offset *= cachep->colour_off;
+
+	if (local_flags & __GFP_WAIT)
+		local_irq_enable();
+
+	/*
+	 * The test for missing atomic flag is performed here, rather than
+	 * the more obvious place, simply to reduce the critical path length
+	 * in kmem_cache_alloc(). If a caller is seriously mis-behaving they
+	 * will eventually be caught here (where it matters).
+	 */
+	kmem_flagcheck(cachep, flags);
+
+	/*
+	 * Get mem for the objs.  Attempt to allocate a physical page from
+	 * 'nodeid'.
+	 */
+	if (!objp)
+		objp = kmem_getpages(cachep, local_flags, nodeid);
+	if (!objp)
+		goto failed;
+
+	/* Get slab management. */
+	slabp = alloc_slabmgmt(cachep, objp, offset,
+			local_flags & ~GFP_CONSTRAINT_MASK, nodeid);
+	if (!slabp)
+		goto opps1;
+
+	slabp->nodeid = nodeid;
+	slab_map_pages(cachep, slabp, objp);
+
+	cache_init_objs(cachep, slabp);
+
+	if (local_flags & __GFP_WAIT)
+		local_irq_disable();
+	check_irq_off();
+	spin_lock(&l3->list_lock);
+
+	/* Make slab active. */
+	list_add_tail(&slabp->list, &(l3->slabs_free));
+	STATS_INC_GROWN(cachep);
+	l3->free_objects += cachep->num;
+	spin_unlock(&l3->list_lock);
+	return 1;
+opps1:
+	kmem_freepages(cachep, objp);
+failed:
+	if (local_flags & __GFP_WAIT)
+		local_irq_disable();
+	return 0;
+}
+
+
+static struct slab *alloc_slabmgmt(struct kmem_cache *cachep, void *objp,
+				   int colour_off, gfp_t local_flags,
+				   int nodeid)
+{
+	struct slab *slabp;
+
+	if (OFF_SLAB(cachep)) {
+		/* Slab management obj is off-slab. */
+		slabp = kmem_cache_alloc_node(cachep->slabp_cache,
+					      local_flags & ~GFP_THISNODE, nodeid);
+		if (!slabp)
+			return NULL;
+	} else {
+		slabp = objp + colour_off;
+		colour_off += cachep->slab_size;
+	}
+	slabp->inuse = 0;
+	slabp->colouroff = colour_off;
+	slabp->s_mem = objp + colour_off;
+	slabp->nodeid = nodeid;
+	return slabp;
+}
+
+slab页面初始化时
+page->lru.next = (struct list_head *)cache;
+page->lru.prev = (struct list_head *)slab;
+
+
+static void cache_init_objs(struct kmem_cache *cachep,
+			    struct slab *slabp)
+{
+	int i;
+
+	for (i = 0; i < cachep->num; i++) {
+		void *objp = index_to_obj(cachep, slabp, i);
+#if DEBUG
+		/* need to poison the objs? */
+		if (cachep->flags & SLAB_POISON)
+			poison_obj(cachep, objp, POISON_FREE);
+		if (cachep->flags & SLAB_STORE_USER)
+			*dbg_userword(cachep, objp) = NULL;
+
+		if (cachep->flags & SLAB_RED_ZONE) {
+			*dbg_redzone1(cachep, objp) = RED_INACTIVE;
+			*dbg_redzone2(cachep, objp) = RED_INACTIVE;
+		}
+		/*
+		 * Constructors are not allowed to allocate memory from the same
+		 * cache which they are a constructor for.  Otherwise, deadlock.
+		 * They must also be threaded.
+		 */
+		if (cachep->ctor && !(cachep->flags & SLAB_POISON))
+			cachep->ctor(cachep, objp + obj_offset(cachep));
+
+		if (cachep->flags & SLAB_RED_ZONE) {
+			if (*dbg_redzone2(cachep, objp) != RED_INACTIVE)
+				slab_error(cachep, "constructor overwrote the"
+					   " end of an object");
+			if (*dbg_redzone1(cachep, objp) != RED_INACTIVE)
+				slab_error(cachep, "constructor overwrote the"
+					   " start of an object");
+		}
+		if ((cachep->buffer_size % PAGE_SIZE) == 0 &&
+			    OFF_SLAB(cachep) && cachep->flags & SLAB_POISON)
+			kernel_map_pages(virt_to_page(objp),
+					 cachep->buffer_size / PAGE_SIZE, 0);
+#else
+		if (cachep->ctor)
+			cachep->ctor(cachep, objp);
+#endif
+		slab_bufctl(slabp)[i] = i + 1;
+	}
+	slab_bufctl(slabp)[i - 1] = BUFCTL_END;
+	slabp->free = 0;
+}
+
+//
+static inline void *____cache_alloc(struct kmem_cache *cachep, gfp_t flags)
+{
+	void *objp;
+	struct array_cache *ac;
+
+	check_irq_off();
+
+	ac = cpu_cache_get(cachep);
+	if (likely(ac->avail)) {
+		//首先从percpu数组中尝试分配
+		STATS_INC_ALLOCHIT(cachep);
+		ac->touched = 1;
+		objp = ac->entry[--ac->avail];
+	} else {
+		STATS_INC_ALLOCMISS(cachep);
+		objp = cache_alloc_refill(cachep, flags);
+	}
+	return objp;
+}
+
+
+static void *cache_alloc_refill(struct kmem_cache *cachep, gfp_t flags)
+{
+	int batchcount;
+	struct kmem_list3 *l3;
+	struct array_cache *ac;
+	int node;
+
+	node = numa_node_id();
+
+	check_irq_off();
+	ac = cpu_cache_get(cachep);
+retry:
+	batchcount = ac->batchcount;
+	if (!ac->touched && batchcount > BATCHREFILL_LIMIT) {
+		/*
+		 * If there was little recent activity on this cache, then
+		 * perform only a partial refill.  Otherwise we could generate
+		 * refill bouncing.
+		 */
+		batchcount = BATCHREFILL_LIMIT;
+	}
+	l3 = cachep->nodelists[node];
+
+	BUG_ON(ac->avail > 0 || !l3);
+	spin_lock(&l3->list_lock);
+
+	/* See if we can refill from the shared array */
+	if (l3->shared && transfer_objects(ac, l3->shared, batchcount))
+		goto alloc_done;
+
+	while (batchcount > 0) {
+		struct list_head *entry;
+		struct slab *slabp;
+		/* Get slab alloc is to come from. */
+		entry = l3->slabs_partial.next;
+		if (entry == &l3->slabs_partial) {
+			l3->free_touched = 1;
+			entry = l3->slabs_free.next;
+			if (entry == &l3->slabs_free)
+				goto must_grow;
+		}
+
+		slabp = list_entry(entry, struct slab, list);
+		check_slabp(cachep, slabp);
+		check_spinlock_acquired(cachep);
+
+		/*
+		 * The slab was either on partial or free list so
+		 * there must be at least one object available for
+		 * allocation.
+		 */
+		BUG_ON(slabp->inuse < 0 || slabp->inuse >= cachep->num);
+
+		while (slabp->inuse < cachep->num && batchcount--) {
+			STATS_INC_ALLOCED(cachep);
+			STATS_INC_ACTIVE(cachep);
+			STATS_SET_HIGH(cachep);
+
+			ac->entry[ac->avail++] = slab_get_obj(cachep, slabp,
+							    node);
+		}
+		check_slabp(cachep, slabp);
+
+		/* move slabp to correct slabp list: */
+		list_del(&slabp->list);
+		if (slabp->free == BUFCTL_END)
+			list_add(&slabp->list, &l3->slabs_full);
+		else
+			list_add(&slabp->list, &l3->slabs_partial);
+	}
+
+must_grow:
+	l3->free_objects -= ac->avail;
+alloc_done:
+	spin_unlock(&l3->list_lock);
+
+	if (unlikely(!ac->avail)) {
+		int x;
+		x = cache_grow(cachep, flags | GFP_THISNODE, node, NULL);
+
+		/* cache_grow can reenable interrupts, then ac could change. */
+		ac = cpu_cache_get(cachep);
+		if (!x && ac->avail == 0)	/* no objects in sight? abort */
+			return NULL;
+
+		if (!ac->avail)		/* objects refilled by interrupt? */
+			goto retry;
+	}
+	ac->touched = 1;
+	return ac->entry[--ac->avail];
+}
+
+
