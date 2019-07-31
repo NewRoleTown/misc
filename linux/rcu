@@ -17,4 +17,279 @@ struct rcu_data {
     struct rcu_head *donelist;  
     struct rcu_head **donetail;  
 };
+
 completed > batch认为rcu完成
+
+
+
+rcu_read_lock
+#define rcu_read_lock() \
+	do { \
+		preempt_disable(); \
+		__acquire(RCU); \
+		rcu_read_acquire(); \
+	} while(0)
+
+
+rcu_read_unlock
+#define rcu_read_unlock() \
+	do { \
+		rcu_read_release(); \
+		__release(RCU); \
+		preempt_enable(); \
+	} while(0)
+
+struct rcu_head {
+	struct rcu_head *next;
+	void (*func)(struct rcu_head *head);
+};
+
+初始化时nxtlist=NULL,nxttail=&nxtlist
+void fastcall call_rcu(struct rcu_head *head,
+				void (*func)(struct rcu_head *rcu))
+{
+	unsigned long flags;
+	struct rcu_data *rdp;
+
+	head->func = func;
+	head->next = NULL;
+	local_irq_save(flags);
+	rdp = &__get_cpu_var(rcu_data);
+
+	***************************************************
+	*rdp->nxttail = head;
+	rdp->nxttail = &head->next;
+	***************************************************
+
+	if (unlikely(++rdp->qlen > qhimark)) {
+		rdp->blimit = INT_MAX;
+		force_quiescent_state(rdp, &rcu_ctrlblk);
+	}
+	local_irq_restore(flags);
+}
+
+void synchronize_rcu(void)
+{
+	struct rcu_synchronize rcu;
+
+	init_completion(&rcu.completion);
+	/* Will wake me after RCU finished */
+	call_rcu(&rcu.head, wakeme_after_rcu);
+
+	/* Wait for it */
+	wait_for_completion(&rcu.completion);
+}
+
+struct rcu_ctrlblk {
+	long	cur;		/* Current batch number.                      */
+	long	completed;	/* Number of the last completed batch         */
+	int	next_pending;	/* Is the next batch already waiting?         */
+
+	int	signaled;
+
+	spinlock_t	lock	____cacheline_internodealigned_in_smp;
+	cpumask_t	cpumask; /* CPUs that need to switch in order    */
+	                         /* for current batch to proceed.        */
+} ____cacheline_internodealigned_in_smp;
+
+
+static struct rcu_ctrlblk rcu_ctrlblk = {
+	.cur = -300,
+	.completed = -300,
+	.lock = __SPIN_LOCK_UNLOCKED(&rcu_ctrlblk.lock),
+	.cpumask = CPU_MASK_NONE,
+};
+
+static void rcu_init_percpu_data(int cpu, struct rcu_ctrlblk *rcp,
+						struct rcu_data *rdp)
+{
+	memset(rdp, 0, sizeof(*rdp));
+	rdp->curtail = &rdp->curlist;
+	rdp->nxttail = &rdp->nxtlist;
+	rdp->donetail = &rdp->donelist;
+	rdp->quiescbatch = rcp->completed;
+	rdp->qs_pending = 0;
+	rdp->cpu = cpu;
+	rdp->blimit = blimit;
+}
+
+这里的cpumask就担当上文里每cpu变量的角色。而cur，completed，则用来同步。我们可以这样理解，cur和completed是系统本身特性，也即系统实时经历的grace编号，一般情况下，新开一个graceperiod等待周期的话，cur会加1，当graceperiod结束后，会将completed置为cur，所以通常情况下，都是completed追着cur跑。那么我们可能会猜测，是不是如果complete=
+curr -1 的时候，就表示系统中graceperiod还没有结束？当completed=
+curr的时候，就表示系统中不存在graceperiod等待周期了？我们姑且这么理解，实际上有些许差别，但设计思想都是一样的。
+
+如果系统第一次出现写者阻塞，也即之前的写者都已经处理完毕，
+那么此时curlist链表一定为空（curlist专门存放已被rcu检测到的写者请求），于是就把nxtlist里的所有成员都移动到curlist指向，并把当前CPU需要等待的graceperiod周期rdp->batch设置为当前系统处理的graceperiod的下一个grace周期，即rcp->cur+1
+
+
+否在该CPU上有需要处理的回调函数并且已经经过一个grace period；
+否没有需要处理的回调函数但有注册的回调函数；
+否该CPU已经完成回调函数的处理；
+否该CPU正在等待一个quiescent state的到来；
+static int __rcu_pending(struct rcu_ctrlblk *rcp, struct rcu_data *rdp)
+{
+	/* This cpu has pending rcu entries and the grace period
+	 * for them has completed.
+	 */
+	completed < rdp->batch
+	if (rdp->curlist && !rcu_batch_before(rcp->completed, rdp->batch))
+		return 1;
+
+	/* This cpu has no pending entries, but there are new entries */
+	有未决的rcu
+	if (!rdp->curlist && rdp->nxtlist)
+		return 1;
+
+	/* This cpu has finished callbacks to invoke */
+	if (rdp->donelist)
+		return 1;
+
+	/* The rcu core waits for a quiescent state from the cpu */
+	if (rdp->quiescbatch != rcp->cur || rdp->qs_pending)
+		return 1;
+
+	/* nothing to do */
+	return 0;
+}
+
+void rcu_check_callbacks(int cpu, int user)
+{
+	if (user || 
+	    (idle_cpu(cpu) && !in_softirq() && 
+				hardirq_count() <= (1 << HARDIRQ_SHIFT))) {
+		rcu_qsctr_inc(cpu);
+		rcu_bh_qsctr_inc(cpu);
+	} else if (!in_softirq())
+		rcu_bh_qsctr_inc(cpu);
+	tasklet_schedule(&per_cpu(rcu_tasklet, cpu));
+}
+
+void update_process_times(int user_tick)
+{
+	struct task_struct *p = current;
+	int cpu = smp_processor_id();
+
+	/* Note: this timer irq context must be accounted for as well. */
+	account_process_tick(p, user_tick);
+	run_local_timers();
+	if (rcu_pending(cpu))
+		rcu_check_callbacks(cpu, user_tick);
+	scheduler_tick();
+	run_posix_cpu_timers(p);
+}
+
+
+static void rcu_start_batch(struct rcu_ctrlblk *rcp)
+{
+	if (rcp->next_pending &&
+			rcp->completed == rcp->cur) {
+		rcp->next_pending = 0;
+		/*
+		 * next_pending == 0 must be visible in
+		 * __rcu_process_callbacks() before it can see new value of cur.
+		 */
+		smp_wmb();
+		rcp->cur++;
+
+		/*
+		 * Accessing nohz_cpu_mask before incrementing rcp->cur needs a
+		 * Barrier  Otherwise it can cause tickless idle CPUs to be
+		 * included in rcp->cpumask, which will extend graceperiods
+		 * unnecessarily.
+		 */
+		smp_mb();
+		//all cpu set 1
+		cpus_andnot(rcp->cpumask, cpu_online_map, nohz_cpu_mask);
+
+		rcp->signaled = 0;
+	}
+}
+
+
+static void __rcu_process_callbacks(struct rcu_ctrlblk *rcp,
+					struct rcu_data *rdp)
+{
+	if (rdp->curlist && !rcu_batch_before(rcp->completed, rdp->batch)) {
+		*rdp->donetail = rdp->curlist;
+		rdp->donetail = rdp->curtail;
+		rdp->curlist = NULL;
+		rdp->curtail = &rdp->curlist;
+	}
+
+	if (rdp->nxtlist && !rdp->curlist) {
+		local_irq_disable();
+		*********************************************
+		rdp->curlist = rdp->nxtlist;
+		rdp->curtail = rdp->nxttail;
+		rdp->nxtlist = NULL;
+		rdp->nxttail = &rdp->nxtlist;
+		*********************************************
+		local_irq_enable();
+
+		/*
+		 * start the next batch of callbacks
+		 */
+
+		/* determine batch number */
+		*********************************************
+		rdp->batch = rcp->cur + 1;
+		*********************************************
+		/* see the comment and corresponding wmb() in
+		 * the rcu_start_batch()
+		 */
+		smp_rmb();
+
+		if (!rcp->next_pending) {
+			/* and start it/schedule start if it's a new batch */
+			spin_lock(&rcp->lock);
+			rcp->next_pending = 1;
+			rcu_start_batch(rcp);
+			spin_unlock(&rcp->lock);
+		}
+	}
+
+	rcu_check_quiescent_state(rcp, rdp);
+	if (rdp->donelist)
+		rcu_do_batch(rdp);
+}
+
+
+static void rcu_check_quiescent_state(struct rcu_ctrlblk *rcp,
+					struct rcu_data *rdp)
+{
+	**************************************************************
+	if (rdp->quiescbatch != rcp->cur) {
+		当有新的rcu时，进此if
+		/* start new grace period: */
+		rdp->qs_pending = 1;
+		rdp->passed_quiesc = 0;
+		rdp->quiescbatch = rcp->cur;
+		return;
+	}
+	**************************************************************
+
+	/* Grace period already completed for this cpu?
+	 * qs_pending is checked instead of the actual bitmap to avoid
+	 * cacheline trashing.
+	 */
+	if (!rdp->qs_pending)
+		return;
+
+	/* 
+	 * Was there a quiescent state since the beginning of the grace
+	 * period? If no, then exit and wait for the next call.
+	 */
+	if (!rdp->passed_quiesc)
+		return;
+	rdp->qs_pending = 0;
+
+	spin_lock(&rcp->lock);
+	/*
+	 * rdp->quiescbatch/rcp->cur and the cpu bitmap can come out of sync
+	 * during cpu startup. Ignore the quiescent state.
+	 */
+	if (likely(rdp->quiescbatch == rcp->cur))
+		cpu_quiet(rdp->cpu, rcp);
+
+	spin_unlock(&rcp->lock);
+}
+

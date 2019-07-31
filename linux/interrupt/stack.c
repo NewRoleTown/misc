@@ -1245,3 +1245,88 @@ init_IRQ
 中有interrupt数组，对应中断入口，其语句为
 push irq号-256
 jmp common_interrupt
+
+(故障会压入error_num和异常function的值
+而中断则压入irq-256和fs
+system call push eax
+)
+
+
+/*
+ * It is safe to do non-atomic ops on ->hardirq_context,
+ * because NMI handlers may not preempt and the ops are
+ * always balanced, so the interrupted value of ->hardirq_context
+ * will always be restored.
+ */
+#define __irq_enter()					\
+	do {						\
+		account_system_vtime(current);		\
+		add_preempt_count(HARDIRQ_OFFSET);	\
+		trace_hardirq_enter();			\
+	} while (0)
+
+__do_IRQ
+fastcall unsigned int do_IRQ(struct pt_regs *regs)
+{	
+	struct pt_regs *old_regs;
+	/* high bit used in ret_from_ code */
+	int irq = ~regs->orig_eax;
+	struct irq_desc *desc = irq_desc + irq;
+#ifdef CONFIG_4KSTACKS
+	union irq_ctx *curctx, *irqctx;
+	u32 *isp;
+#endif
+
+	if (unlikely((unsigned)irq >= NR_IRQS)) {
+		printk(KERN_EMERG "%s: cannot handle IRQ %d\n",
+					__FUNCTION__, irq);
+		BUG();
+	}
+
+	old_regs = set_irq_regs(regs);
+	irq_enter();
+#ifdef CONFIG_4KSTACKS
+
+	curctx = (union irq_ctx *) current_thread_info();
+	irqctx = hardirq_ctx[smp_processor_id()];
+
+	/*
+	 * this is where we switch to the IRQ stack. However, if we are
+	 * already using the IRQ stack (because we interrupted a hardirq
+	 * handler) we can't do that and just have to keep using the
+	 * current stack (which is the irq stack already after all)
+	 */
+	if (curctx != irqctx) {
+		int arg1, arg2, ebx;
+
+		/* build the stack frame on the IRQ stack */
+		将当前栈顶存previous_esp,当前task_struct存task
+		isp = (u32*) ((char*)irqctx + sizeof(*irqctx));
+		irqctx->tinfo.task = curctx->tinfo.task;
+		irqctx->tinfo.previous_esp = current_stack_pointer;
+
+		/*
+		 * Copy the softirq bits in preempt_count so that the
+		 * softirq checks work in the hardirq context.
+		 */
+		irqctx->tinfo.preempt_count =
+			(irqctx->tinfo.preempt_count & ~SOFTIRQ_MASK) |
+			(curctx->tinfo.preempt_count & SOFTIRQ_MASK);
+
+		asm volatile(
+			"       xchgl  %%ebx,%%esp      \n"
+			"       call   *%%edi           \n"
+			"       movl   %%ebx,%%esp      \n"
+			: "=a" (arg1), "=d" (arg2), "=b" (ebx)
+			:  "0" (irq),   "1" (desc),  "2" (isp),
+			   "D" (desc->handle_irq)
+			: "memory", "cc"
+		);
+	} else
+#endif
+		desc->handle_irq(irq, desc);
+
+	irq_exit();
+	set_irq_regs(old_regs);
+	return 1;
+}
