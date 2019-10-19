@@ -1,0 +1,133 @@
+未决标记:GHCND
+
+--------------------------
+gs,fs的使用
+目前知fs在32位下与指示cpuid有关
+__KERNEL_PERCPU，此段由fs指向
+gs为64位下有关
+/* Per processor datastructure. %gs points to it while the kernel runs */ 
+struct x8664_pda {
+	struct task_struct *pcurrent;	/* 0  Current process */
+	unsigned long data_offset;	/* 8 Per cpu data offset from linker
+					   address */
+	unsigned long kernelstack;  /* 16 top of kernel stack for current */
+	unsigned long oldrsp; 	    /* 24 user rsp for system call */
+        int irqcount;		    /* 32 Irq nesting counter. Starts with -1 */
+	int cpunumber;		    /* 36 Logical CPU number */
+#ifdef CONFIG_CC_STACKPROTECTOR
+	unsigned long stack_canary;	/* 40 stack canary value */
+					/* gcc-ABI: this canary MUST be at
+					   offset 40!!! */
+#endif
+	char *irqstackptr;
+	int nodenumber;		    /* number of current node */
+	unsigned int __softirq_pending;
+	unsigned int __nmi_count;	/* number of NMI on this CPUs */
+	short mmu_state;
+	short isidle;
+	struct mm_struct *active_mm;
+	unsigned apic_timer_irqs;
+	unsigned irq0_irqs;
+	unsigned irq_resched_count;
+	unsigned irq_call_count;
+	unsigned irq_tlb_count;
+	unsigned irq_thermal_count;
+	unsigned irq_threshold_count;
+	unsigned irq_spurious_count;
+} ____cacheline_aligned_in_smp;
+init_cpu同化所有GDT
+smpcommon.c里面有改动PERCPU段的内容
+
+x86_64架构下，++__get_per_cpu(my_var) 会被反汇编为
+
+mov  $per_cpu__my_var, %rax;
+mov  %gs:0x08, %rdx  #其中0x08是offset(struct x8664_pda, data_offset)，记录XXX实际存储位置和per_cpu__XXX之间的偏移
+incl (%rdx, %rax, 1)
+
+这里面用到了gs段寄存器，来表示x8664_pda结构的起始位置，
+我的问题是，关于gs段寄存器的初始化是在哪段代码里完成的（显然不同cpu初始化的内容是不一样的）？
+
+
+
+4楼
+[报告]
+发表于 2015-05-25 09:49 |只看该作者
+回复 2# fengpan_cu
+
+是指这个上下文吗？
+
+            /* set up data segments */
+            xorl %eax,%eax
+            movl %eax,%ds
+            movl %eax,%ss
+            movl %eax,%es
+
+            /*
+             * We don't really need to load %fs or %gs, but load them anyway
+             * to kill any stale realmode selectors.  This allows execution
+             * under VT hardware.
+             */
+            movl %eax,%fs
+            movl %eax,%gs
+
+            /* Set up %gs.
+             *
+             * The base of %gs always points to the bottom of the irqstack
+             * union.  If the stack protector canary is enabled, it is
+             * located at %gs:40.  Note that, on SMP, the boot cpu uses
+             * init data section till per cpu areas are set up.
+             */
+            movl        $MSR_GS_BASE,%ecx
+            movl        initial_gs(%rip),%eax
+            movl        initial_gs+4(%rip),%edx
+            wrmsr
+
+复制代码
+在这里%gs只是被初始化为0（有些版本初始化为KERNEL_DS），感觉不是这一段。
+
+貌似 /* set up %gs */ 后面有MSR_GS_BASE的那一段更像，这里用到了某个msr，是遵循x86_64的某个特定约定吗？
+
+/* x86-64 specific MSRs */
+#define MSR_EFER                0xc0000080 /* extended feature register */
+#define MSR_STAR                0xc0000081 /* legacy mode SYSCALL target */
+#define MSR_LSTAR               0xc0000082 /* long mode SYSCALL target */
+#define MSR_CSTAR               0xc0000083 /* compat mode SYSCALL target */
+#define MSR_SYSCALL_MASK        0xc0000084 /* EFLAGS mask for syscall */
+#define MSR_FS_BASE             0xc0000100 /* 64bit FS base */
+#define MSR_GS_BASE             0xc0000101 /* 64bit GS base */
+
+   
+	
+5楼
+[报告]
+发表于 2015-08-14 17:56 |只看该作者
+在entry.S里看到了swapgs指令，查了一下，http://www.liteirc.net/mirrors/s ... ruction/SWAPGS.html
+
+Description
+SWAPGS exchanges the current GS base register value with the value contained in MSR address C0000102H (MSR_KERNELGSbase). KernelGSbase is guaranteed to be canonical; so SWAPGS does not perform a canonical check. The SWAPGS instruction is a privileged instruction intended for use by system software.
+
+When using SYSCALL to implement system calls, there is no kernel stack at the OS entry point. Neither is there a straightforward method to obtain a pointer to kernel structures from which the kernel stack pointer could be read. Thus, the kernel can't save general purpose registers or reference memory.
+
+By design, SWAPGS does not require any general purpose registers or memory operands. No registers need to be saved before using the instruction. SWAPGS exchanges the CPL 0 data pointer from the KernelGSbase MSR with the GS base register. The kernel can then use the GS prefix on normal memory references to access kernel data structures. Similarly, when the OS kernel is entered using an interrupt or exception (where the kernel stack is already set up), SWAPGS can be used to quickly get a pointer to the kernel data structures.
+
+The KernelGSbase MSR itself is only accessible using RDMSR/WRMSR instructions. Those instructions are only accessible at privilege level 0. WRMSR will cause a #GP(0) if the value to be written to KernelGSbase MSR is non-canonical.
+
+
+
+
+
+--------------------------
+sys_futex相关
+--------------------------
+mmap，布局相关
+DLINFO
+
+---------------------------
+水印初始化问题
+NORMAL DMA标记
+mm/page_alloc.c 1720行
+---------------------------
+换cr3会不会刷全局页的tlb
+pat位页表，页目录问
+---------------------------
+windows判断页是否为文件有个0x800,具体见0.4.5的MmDeleteVirtualMemory

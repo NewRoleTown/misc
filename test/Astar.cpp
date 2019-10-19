@@ -57,6 +57,10 @@ void init(){
 	map[starti][startj] = 's';
 	map[targeti][targetj] = 'e';
 
+	map[5][2] = 'w';
+	map[5][3] = 'w';
+	map[5][4] = 'w';
+	map[5][5] = 'w';
 }
 
 
@@ -239,9 +243,7 @@ int main(){
 			}
 		}
 
-
 	}
-
 
 
 	return 0;
