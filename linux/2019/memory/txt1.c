@@ -308,3 +308,127 @@ static int __init init_per_zone_pages_min(void)
 	setup_per_zone_lowmem_reserve();
 	return 0;
 }
+
+
+##########################################################################
+/*
+ * Each physical page in the system has a struct page associated with
+ * it to keep track of whatever it is we are using the page for at the
+ * moment. Note that we have no way to track which tasks are using
+ * a page, though if it is a pagecache page, rmap structures can tell us
+ * who is mapping it.
+ */
+struct page {
+	unsigned long flags;		/* Atomic flags, some possibly
+					 * updated asynchronously */
+	//无引用的页是-1,page_count返回这个字段+1
+	atomic_t _count;		/* Usage count, see below. */
+	union {
+        //映射的页表项计数,用于限制逆向映射
+		atomic_t _mapcount;	/* Count of ptes mapped in mms,
+					 * to show when page is mapped
+					 * & limit reverse map searches.
+					 */
+	};
+	union {
+	    struct {
+		//页中是块缓存时，这个字段指向块缓冲头部
+		unsigned long private;		/* Mapping-private opaque data:
+					 	 * usually used for buffer_heads
+						 * if PagePrivate set; used for
+						 * swp_entry_t if PageSwapCache;
+						 * indicates order in the buddy
+						 * system if PG_buddy is set.
+						 */
+        //最低位0则指向inode,address_space,或NULL
+        //否则，为匿名内存，指向anon_vma
+        //PAGE_MAPPING_ANON
+		struct address_space *mapping;	/* If low bit clear, points to
+						 * inode address_space, or NULL.
+						 * If page mapped as anonymous
+						 * memory, low bit is set, and
+						 * it points to anon_vma object:
+						 * see PAGE_MAPPING_ANON below.
+						 */
+	    };
+	    struct kmem_cache *slab;	/* SLUB: Pointer to slab */
+        //用于复合页
+	    struct page *first_page;	/* Compound tail pages */
+	};
+	union {
+        //映射的偏移量
+		pgoff_t index;		/* Our offset within mapping. */
+	};
+    //active,inactiv链表项
+    //空闲时链入free_area链表
+	struct list_head lru;		/* Pageout list, eg. active_list
+					 * protected by zone->lru_lock !
+					 */
+	/*
+	 * On machines where all RAM is mapped into kernel address space,
+	 * we can simply calculate the virtual address. On machines with
+	 * highmem some memory is mapped into kernel virtual memory
+	 * dynamically, so we need a place to store that address.
+	 * Note that this field could be 16 bits on x86 ... ;)
+	 *
+	 * Architectures with slow multiplication can define
+	 * WANT_PAGE_VIRTUAL in asm/page.h
+	 */
+#if defined(WANT_PAGE_VIRTUAL)
+	void *virtual;			/* Kernel virtual address (NULL if
+					   not kmapped, ie. highmem) */
+#endif /* WANT_PAGE_VIRTUAL */
+};
+
+#define PG_locked	 	 0	/* Page is locked. Don't touch. */
+#define PG_error		 1
+#define PG_referenced	 2
+#define PG_uptodate		 3
+
+#define PG_dirty	 	 4
+#define PG_lru			 5
+#define PG_active		 6
+#define PG_slab			 7	/* slab debug (Suparna wants this) */
+
+#define PG_owner_priv_1	 8	/* Owner use. If pagecache, fs may use*/
+#define PG_arch_1		 9
+#define PG_reserved		10
+#define PG_private		11	/* If pagecache, has fs-private data */
+
+#define PG_writeback		12	/* Page is under writeback */
+#define PG_compound		14	/* Part of a compound page */
+//页用于交换缓存,private用于swap_entry_t
+#define PG_swapcache		15	/* Swap page: swp_entry_t in private */
+
+#define PG_mappedtodisk		16	/* Has blocks allocated on-disk */
+//决定回收这个页
+#define PG_reclaim		17	/* To be reclaimed asap */
+//是否在伙伴系统管理下
+#define PG_buddy		19	/* Page is free, on buddy lists */
+
+/* PG_readahead is only used for file reads; PG_reclaim is only for writes */
+#define PG_readahead		PG_reclaim /* Reminder to do async read-ahead */
+
+/* PG_owner_priv_1 users should have descriptive aliases */
+#define PG_checked		PG_owner_priv_1 /* Used by some filesystems */
+#define PG_pinned		PG_owner_priv_1	/* Xen pinned pagetable */
+
+static inline void wait_on_page_locked(struct page *page)
+{
+	if (PageLocked(page))
+		wait_on_page_bit(page, PG_locked);
+}
+
+include/asm-arch/page.h
+include/asm-arch/pgtable.h
+
+
+
+#################################################################################
+代码段描述符的L位指示代码是否默认为64位(只有ia-32使用)
+代码段的D/B位指示代码32位还是16位
+
+低特权级的代码到高特权级运行只有一种情况，就是call调用門到非一致代码段
+此时dpl < gate_dpl,cpl > dest_dpl,进call后cpl不变
+
+选择子的值在asm/segment.h文件中定义
