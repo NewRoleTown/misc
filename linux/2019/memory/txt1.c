@@ -411,7 +411,10 @@ struct page {
 
 /* PG_owner_priv_1 users should have descriptive aliases */
 #define PG_checked		PG_owner_priv_1 /* Used by some filesystems */
-#define PG_pinned		PG_owner_priv_1	/* Xen pinned pagetable */
+#define PG_pinned		PG_owner_priv_1	/* Xen pinned pagetable - LOAD_OFFSET) {
+		TEXT_TEXT
+			SCHED_TEXT
+			LOCK_TEXT*/
 
 static inline void wait_on_page_locked(struct page *page)
 {
@@ -432,3 +435,108 @@ include/asm-arch/pgtable.h
 此时dpl < gate_dpl,cpl > dest_dpl,进call后cpl不变
 
 选择子的值在asm/segment.h文件中定义
+
+#################################################################################
+access由cpu设置
+
+	/*
+	 * _PAGE_PSE set in the page directory entry just means that
+	 * the page directory entry points directly to a 4MB-aligned block of
+	 * memory. 
+	 */
+	//present为0时，表项被其他功能复用
+#define _PAGE_BIT_PRESENT	0
+	//x86可读便可执行，PAE或x64才有nx
+#define _PAGE_BIT_RW		1
+#define _PAGE_BIT_USER		2
+	//write-through:写内存和写缓存同步
+	//write-back:只改缓存，刷缓存才写回去
+#define _PAGE_BIT_PWT		3
+	//是否对该页启用高速缓存
+#define _PAGE_BIT_PCD		4
+#define _PAGE_BIT_ACCESSED	5
+#define _PAGE_BIT_DIRTY		6
+	//仅用于页目录项
+	//页表项的意义是 内核将内存中存在但是没有读写执行权限的页给上这个标记
+#define _PAGE_BIT_PSE		7	/* 4 MB (or 2MB) page, Pentium+, if present.. */
+	//仅用于页表项
+#define _PAGE_BIT_GLOBAL	8	/* Global TLB entry PPro+ */
+#define _PAGE_BIT_UNUSED1	9	/* available for programmer */
+#define _PAGE_BIT_UNUSED2	10
+#define _PAGE_BIT_UNUSED3	11
+#define _PAGE_BIT_NX		63
+
+#define _PAGE_PRESENT	0x001
+#define _PAGE_RW	0x002
+#define _PAGE_USER	0x004
+#define _PAGE_PWT	0x008
+#define _PAGE_PCD	0x010
+#define _PAGE_ACCESSED	0x020
+#define _PAGE_DIRTY	0x040
+#define _PAGE_PSE	0x080	/* 4 MB (or 2MB) page, Pentium+, if present.. */
+#define _PAGE_GLOBAL	0x100	/* Global TLB entry PPro+ */
+#define _PAGE_UNUSED1	0x200	/* available for programmer */
+#define _PAGE_UNUSED2	0x400
+#define _PAGE_UNUSED3	0x800
+
+	/* If _PAGE_PRESENT is clear, we use these: */
+	//不存在的页不可能是脏的
+#define _PAGE_FILE	0x040	/* nonlinear file mapping, saved PTE; unset:swap */
+#define _PAGE_PROTNONE	0x080	/* if the user mapped it with PROT_NONE;
+								   pte_present gives true */
+#ifdef CONFIG_X86_PAE
+#define _PAGE_NX	(1ULL<<_PAGE_BIT_NX)
+#else
+#define _PAGE_NX	0
+#endif
+
+
+pte_t用于页表项
+#define pte_present(x)	((x).pte_low & (_PAGE_PRESENT | _PAGE_PROTNONE))
+
+start_kernel----|
+				|----setup_arch
+				|----setup_per_cpu_areas
+				|----build_all_zonelists
+				|----mem_init
+				|----setup_per_cpu_pageset
+				
+#define pageblock_order		(MAX_ORDER-1)
+#define pageblock_nr_pages	(1UL << pageblock_order)
+
+void __ref build_all_zonelists(pg_data_t *pgdat, struct zone *zone)
+{
+	set_zonelist_order();
+
+	if (system_state == SYSTEM_BOOTING) {
+		__build_all_zonelists(NULL);
+		mminit_verify_zonelist();
+		cpuset_init_current_mems_allowed();
+	} else {
+		/* we have to stop all cpus to guarantee there is no user
+		   of zonelist */
+		stop_machine(__build_all_zonelists, pgdat, NULL);
+		/* cpuset refresh routine should be here */
+	}
+	vm_total_pages = nr_free_pagecache_pages();
+	/*
+	 * Disable grouping by mobility if the number of pages in the
+	 * system is too low to allow the mechanism to work. It would be
+	 * more accurate, but expensive to check per-zone. This check is
+	 * made on memory-hotadd so a system can start with mobility
+	 * disabled and enable it later
+	 */
+	//*********************这里的判断启用迁移
+	if (vm_total_pages < (pageblock_nr_pages * MIGRATE_TYPES))
+		page_group_by_mobility_disabled = 1;
+	else
+		page_group_by_mobility_disabled = 0;
+
+	printk("Built %i zonelists in %s order, mobility grouping %s.  "
+		"Total pages: %ld\n",
+			nr_online_nodes,
+			zonelist_order_name[current_zonelist_order],
+			page_group_by_mobility_disabled ? "off" : "on",
+			vm_total_pages);
+}
+
