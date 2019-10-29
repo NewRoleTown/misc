@@ -475,6 +475,45 @@ static unsigned long __init setup_memory(void)
 之后paging_init初始化页表
 固定映射也在这里初始化
  
+the length of vmalloc section
+unsigned int __VMALLOC_RESERVE = 128 << 20;
+
+/* Just any arbitrary offset to the start of the vmalloc VM area: the
+ * current 8MB value just means that there will be a 8MB "hole" after the
+ * physical memory until the kernel virtual memory starts.  That means that
+ * any out-of-bounds memory accesses will hopefully be caught.
+ * The vmalloc() routines leaves a hole of 4kB between each vmalloced
+ * area for the same reason. ;)
+ */
+#define VMALLOC_OFFSET	(8 * 1024 * 1024)
+
+#ifndef __ASSEMBLY__
+extern bool __vmalloc_start_set; /* set once high_memory is set */
+#endif
+
+#define VMALLOC_START	((unsigned long)high_memory + VMALLOC_OFFSET)
+#ifdef CONFIG_X86_PAE
+#define LAST_PKMAP 512
+#else
+#define LAST_PKMAP 1024
+#endif
+
+#define PKMAP_BASE ((FIXADDR_BOOT_START - PAGE_SIZE * (LAST_PKMAP + 1))	\
+		    & PMD_MASK)
+
+#ifdef CONFIG_HIGHMEM
+# define VMALLOC_END	(PKMAP_BASE - 2 * PAGE_SIZE)
+#else
+# define VMALLOC_END	(FIXADDR_START - 2 * PAGE_SIZE)
+#endif
+
+#define MODULES_VADDR	VMALLOC_START
+#define MODULES_END	VMALLOC_END
+#define MODULES_LEN	(MODULES_VADDR - MODULES_END)
+
+#define MAXMEM	(VMALLOC_END - PAGE_OFFSET - __VMALLOC_RESERVE)
+
+MAXMEM
 /*
  * paging_init() sets up the page tables - note that the first 8MB are
  * already mapped by head.S.
@@ -495,6 +534,93 @@ void __init paging_init(void)
 	kmap_init();
 }
 
+
+#ifdef CONFIG_X86_PAE
+#define LAST_PKMAP 512
+#else
+#define LAST_PKMAP 1024
+#endif
+/*
+ * Ordering is:
+ *
+ * FIXADDR_TOP
+ * 			fixed_addresses
+ * FIXADDR_START
+ * 			temp fixed addresses
+ * FIXADDR_BOOT_START
+ * 			Persistent kmap area
+ * PKMAP_BASE
+ * VMALLOC_END
+ * 			Vmalloc area
+ * VMALLOC_START
+ * high_memory
+ */
+static void __init permanent_kmaps_init(pgd_t *pgd_base)
+{
+	pgd_t *pgd;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *pte;
+	unsigned long vaddr;
+
+	//pkmap的位置在vmalloc_end后面2个页面(highmem存在)
+	//共1024个页面
+	vaddr = PKMAP_BASE;
+	page_table_range_init(vaddr, vaddr + PAGE_SIZE*LAST_PKMAP, pgd_base);
+
+	pgd = swapper_pg_dir + pgd_index(vaddr);
+	pud = pud_offset(pgd, vaddr);
+	pmd = pmd_offset(pud, vaddr);
+	pte = pte_offset_kernel(pmd, vaddr);
+	//记录这个地址的内核虚拟地址
+	pkmap_page_table = pte;	
+}
+
+unsigned long __FIXADDR_TOP = 0xfffff000;
+
+enum fixed_addresses {
+	FIX_HOLE,
+	FIX_VDSO,
+	FIX_DBGP_BASE,
+	FIX_EARLYCON_MEM_BASE,
+#ifdef CONFIG_X86_LOCAL_APIC
+	FIX_APIC_BASE,	/* local (CPU) APIC) -- required for SMP or not */
+#endif
+#ifdef CONFIG_X86_IO_APIC
+	FIX_IO_APIC_BASE_0,
+	FIX_IO_APIC_BASE_END = FIX_IO_APIC_BASE_0 + MAX_IO_APICS-1,
+#endif
+#ifdef CONFIG_X86_F00F_BUG
+	FIX_F00F_IDT,	/* Virtual mapping for IDT */
+#endif
+#ifdef CONFIG_X86_CYCLONE_TIMER
+	FIX_CYCLONE_TIMER, /*cyclone timer register*/
+#endif 
+#ifdef CONFIG_HIGHMEM
+	FIX_KMAP_BEGIN,	/* reserved pte's for temporary kernel mappings */		//各个CPU的临时映射地址
+	FIX_KMAP_END = FIX_KMAP_BEGIN+(KM_TYPE_NR*NR_CPUS)-1,
+#endif
+#ifdef CONFIG_ACPI
+	FIX_ACPI_BEGIN,
+	FIX_ACPI_END = FIX_ACPI_BEGIN + FIX_ACPI_PAGES - 1,
+#endif
+#ifdef CONFIG_PCI_MMCONFIG
+	FIX_PCIE_MCFG,
+#endif
+#ifdef CONFIG_PARAVIRT
+	FIX_PARAVIRT_BOOTMAP,
+#endif
+	__end_of_permanent_fixed_addresses,
+	/* temporary boot-time mappings, used before ioremap() is functional */
+#define NR_FIX_BTMAPS	16
+	FIX_BTMAP_END = __end_of_permanent_fixed_addresses,
+	FIX_BTMAP_BEGIN = FIX_BTMAP_END + NR_FIX_BTMAPS - 1,
+	FIX_WP_TEST,
+	__end_of_fixed_addresses
+};
+
+set_fixmap
+
 static void __init pagetable_init (void)
 {
 	unsigned long vaddr, end;
@@ -510,7 +636,8 @@ static void __init pagetable_init (void)
 	 */
 	vaddr = __fix_to_virt(__end_of_fixed_addresses - 1) & PMD_MASK;
 	end = (FIXADDR_TOP + PMD_SIZE - 1) & PMD_MASK;
-	//范围地址分配表(pmd)(不分配具体页面)
+	//范围地址分配表(不分配具体页面)
+	//fix map还是分配了的
 	page_table_range_init(vaddr, end, pgd_base);
 
 	//固定映射
@@ -519,10 +646,60 @@ static void __init pagetable_init (void)
 	paravirt_pagetable_setup_done(pgd_base);
 }
 
+static void __init kernel_physical_mapping_init(pgd_t *pgd_base)
+{
+	unsigned long pfn;
+	pgd_t *pgd;
+	pmd_t *pmd;
+	pte_t *pte;
+	int pgd_idx, pmd_idx, pte_ofs;
+
+	pgd_idx = pgd_index(PAGE_OFFSET);
+	pgd = pgd_base + pgd_idx;
+	pfn = 0;
+
+	for (; pgd_idx < PTRS_PER_PGD; pgd++, pgd_idx++) {
+		//32位非pae直接返回pgd
+		pmd = one_md_table_init(pgd);
+		//只映射低端内存(32位896)
+		if (pfn >= max_low_pfn)
+			continue;
+		for (pmd_idx = 0; pmd_idx < PTRS_PER_PMD && pfn < max_low_pfn; pmd++, pmd_idx++) {
+			//从3G起的虚拟地址
+			unsigned int address = pfn * PAGE_SIZE + PAGE_OFFSET;
+
+			//分配页表并设置到pgd
+			pte = one_page_table_init(pmd);
+
+			for (pte_ofs = 0;
+					pte_ofs < PTRS_PER_PTE && pfn < max_low_pfn;
+					pte++, pfn++, pte_ofs++, address += PAGE_SIZE) {
+				if (is_kernel_text(address))
+					set_pte(pte, pfn_pte(pfn, PAGE_KERNEL_EXEC));
+				else
+					set_pte(pte, pfn_pte(pfn, PAGE_KERNEL));
+			}
+		}
+	}
+}
+
+static void __init kmap_init(void)
+{
+	unsigned long kmap_vstart;
+
+	/* cache the first kmap pte */
+	//虚拟地址
+	kmap_vstart = __fix_to_virt(FIX_KMAP_BEGIN);
+	//页表项
+	kmap_pte = kmap_get_fixmap_pte(kmap_vstart);
+
+	kmap_prot = PAGE_KERNEL;
+}
+
 //3.14
 void __init paging_init(void)
 {
-	pagetable_init();
+	pagetable_init(); ~ permanent_kmaps_init(pgd_base);
 
 	__flush_tlb_all();
 
@@ -534,6 +711,6 @@ void __init paging_init(void)
 	olpc_dt_build_devicetree();
 	sparse_memory_present_with_active_regions(MAX_NUMNODES);
 	sparse_init();
-	zone_sizes_init();
+	zone_sizes_init(); ~ free_area_init_nodes(max_zone_pfns);
 }
 

@@ -6,8 +6,6 @@
 
 选择子的值在asm/segment.h文件中定义
 
-	printf("reply %s\n",reply->element[0]->str);
-
 
 enum zone_type {
 #ifdef CONFIG_ZONE_DMA

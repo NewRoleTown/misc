@@ -1,5 +1,3 @@
-
-
 #define VMALLOC_OFFSET	(8*1024*1024)
 #define VMALLOC_START	(((unsigned long) high_memory + \
 			2*VMALLOC_OFFSET-1) & ~(VMALLOC_OFFSET-1))
@@ -456,9 +454,4 @@ SECTIONS
 
   DWARF_DEBUG
 }
-
-/*
-     
-
-*/
 
