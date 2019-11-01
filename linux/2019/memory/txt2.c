@@ -714,3 +714,125 @@ void __init paging_init(void)
 	zone_sizes_init(); ~ free_area_init_nodes(max_zone_pfns);
 }
 
+static void __paginginit free_area_init_core(struct pglist_data *pgdat,
+		unsigned long node_start_pfn, unsigned long node_end_pfn,
+		unsigned long *zones_size, unsigned long *zholes_size)
+{
+	enum zone_type j;
+	int nid = pgdat->node_id;
+	unsigned long zone_start_pfn = pgdat->node_start_pfn;
+	int ret;
+
+	pgdat_resize_init(pgdat);
+
+	init_waitqueue_head(&pgdat->kswapd_wait);
+	init_waitqueue_head(&pgdat->pfmemalloc_wait);
+	pgdat_page_cgroup_init(pgdat);
+
+	for (j = 0; j < MAX_NR_ZONES; j++) {
+		struct zone *zone = pgdat->node_zones + j;
+		unsigned long size, realsize, freesize, memmap_pages;
+
+		size = zone_spanned_pages_in_node(nid, j, node_start_pfn,
+						  node_end_pfn, zones_size);
+		realsize = freesize = size - zone_absent_pages_in_node(nid, j,
+								node_start_pfn,
+								node_end_pfn,
+								zholes_size);
+
+		/*
+		 * Adjust freesize so that it accounts for how much memory
+		 * is used by this zone for memmap. This affects the watermark
+		 * and per-cpu initialisations
+		 */
+
+		//计算出空闲空间后计算memmap所需的空间，然后空闲空间减去这个数量
+		memmap_pages = calc_memmap_size(size, realsize);
+		if (freesize >= memmap_pages) {
+			freesize -= memmap_pages;
+			if (memmap_pages)
+				printk(KERN_DEBUG
+				       "  %s zone: %lu pages used for memmap\n",
+				       zone_names[j], memmap_pages);
+		} else
+			printk(KERN_WARNING
+				"  %s zone: %lu pages exceeds freesize %lu\n",
+				zone_names[j], memmap_pages, freesize);
+
+		/* Account for reserved pages */
+		if (j == 0 && freesize > dma_reserve) {
+			freesize -= dma_reserve;
+			printk(KERN_DEBUG "  %s zone: %lu pages reserved\n",
+					zone_names[0], dma_reserve);
+		}
+
+		if (!is_highmem_idx(j))
+			nr_kernel_pages += freesize;
+		/* Charge for highmem memmap if there are enough kernel pages */
+		else if (nr_kernel_pages > memmap_pages * 2)
+			nr_kernel_pages -= memmap_pages;
+		nr_all_pages += freesize;
+
+		zone->spanned_pages = size;
+		zone->present_pages = realsize;
+		/*
+		 * Set an approximate value for lowmem here, it will be adjusted
+		 * when the bootmem allocator frees pages into the buddy system.
+		 * And all highmem pages will be managed by the buddy system.
+		 */
+		zone->managed_pages = is_highmem_idx(j) ? realsize : freesize;
+
+		zone->name = zone_names[j];
+		spin_lock_init(&zone->lock);
+		spin_lock_init(&zone->lru_lock);
+		zone_seqlock_init(zone);
+		zone->zone_pgdat = pgdat;
+		zone_pcp_init(zone);
+
+		/* For bootup, initialized properly in watermark setup */
+		mod_zone_page_state(zone, NR_ALLOC_BATCH, zone->managed_pages);
+
+		lruvec_init(&zone->lruvec);
+		if (!size)
+			continue;
+
+		set_pageblock_order();
+		setup_usemap(pgdat, zone, zone_start_pfn, size);
+		ret = init_currently_empty_zone(zone, zone_start_pfn,
+						size, MEMMAP_EARLY);
+		BUG_ON(ret);
+		//init memmap
+		memmap_init(size, nid, j, zone_start_pfn);
+		zone_start_pfn += size;
+	}
+}
+
+static __meminit void zone_pcp_init(struct zone *zone)
+{
+	/*
+	 * per cpu subsystem is not up at this point. The following code
+	 * relies on the ability of the linker to provide the
+	 * offset of a (static) per cpu variable into the per cpu area.
+	 */
+	zone->pageset = &boot_pageset;
+
+	if (populated_zone(zone))
+		printk(KERN_DEBUG "  %s zone: %lu pages, LIFO batch:%u\n",
+			zone->name, zone->present_pages,
+					 zone_batchsize(zone));
+}
+
+
+//2.6
+static __meminit void zone_pcp_init(struct zone *zone)
+{
+	int cpu;
+	unsigned long batch = zone_batchsize(zone);
+
+	for (cpu = 0; cpu < NR_CPUS; cpu++) {
+		setup_pageset(zone_pcp(zone,cpu), batch);
+	}
+	if (zone->present_pages)
+		printk(KERN_DEBUG "  %s zone: %lu pages, LIFO batch:%lu\n",
+			zone->name, zone->present_pages, batch);
+}
