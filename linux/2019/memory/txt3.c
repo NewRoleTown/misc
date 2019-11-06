@@ -78,3 +78,11 @@ static unsigned long __init init_bootmem_core(pg_data_t *pgdat,
 
 	return mapsize;
 }
+
+__alloc_bootmem
+
+
+MAX_DMA_ADDRESS
+_end+4096:bootmap{start = 0,end = max_low_pfn}
+0x10000:kernel
+0-0x100000:dma
