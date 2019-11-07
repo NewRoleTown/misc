@@ -1,7 +1,3 @@
-ZONE_MOVABLE:
-movable_zone
-存储了被用作movable的zone,32一般是high
-zone_movable_pfn存储了其中用作movable的起始位置
 
 
 #define MIGRATE_UNMOVABLE     0
@@ -36,7 +32,7 @@ build_all_zonelists中
 		page_group_by_mobility_disabled = 1;
 这里的判断启用迁移
 
-zone->pageblock_flag是一个位图，每页标记了2位用于指示移动类型
+zone->pageblock_flag是一个位图，每页标记了3位用于指示移动类型
 pageblock为单位
 static void __init setup_usemap(struct pglist_data *pgdat,
 				struct zone *zone,
@@ -187,3 +183,85 @@ memmap_init_zone
 		    && (pfn < zone_end_pfn(z))
 		    && !(pfn & (pageblock_nr_pages - 1)))
 			set_pageblock_migratetype(page, MIGRATE_MOVABLE);
+
+
+###############################################################################
+free_area_init_nodes
+void __init free_area_init_nodes(unsigned long *max_zone_pfn)
+{
+	unsigned long start_pfn, end_pfn;
+	int i, nid;
+
+	/* Record where the zone boundaries are */
+	memset(arch_zone_lowest_possible_pfn, 0,
+				sizeof(arch_zone_lowest_possible_pfn));
+	memset(arch_zone_highest_possible_pfn, 0,
+				sizeof(arch_zone_highest_possible_pfn));
+	arch_zone_lowest_possible_pfn[0] = find_min_pfn_with_active_regions();
+	arch_zone_highest_possible_pfn[0] = max_zone_pfn[0];
+	for (i = 1; i < MAX_NR_ZONES; i++) {
+		if (i == ZONE_MOVABLE)
+			continue;
+		arch_zone_lowest_possible_pfn[i] =
+			arch_zone_highest_possible_pfn[i-1];
+		arch_zone_highest_possible_pfn[i] =
+			max(max_zone_pfn[i], arch_zone_lowest_possible_pfn[i]);
+	}
+	arch_zone_lowest_possible_pfn[ZONE_MOVABLE] = 0;
+	arch_zone_highest_possible_pfn[ZONE_MOVABLE] = 0;
+
+	//以上确认边界
+
+	/* Find the PFNs that ZONE_MOVABLE begins at in each node */
+	memset(zone_movable_pfn, 0, sizeof(zone_movable_pfn));
+	//ZONE_MOVABLE:
+	//movable_zone
+	//存储了被用作movable的zone,32一般是high
+	//zone_movable_pfn存储了其中用作movable的起始位置
+	find_zone_movable_pfns_for_nodes();
+
+	/* Print out the zone ranges */
+	printk("Zone ranges:\n");
+	for (i = 0; i < MAX_NR_ZONES; i++) {
+		if (i == ZONE_MOVABLE)
+			continue;
+		printk(KERN_CONT "  %-8s ", zone_names[i]);
+		if (arch_zone_lowest_possible_pfn[i] ==
+				arch_zone_highest_possible_pfn[i])
+			printk(KERN_CONT "empty\n");
+		else
+			printk(KERN_CONT "[mem %0#10lx-%0#10lx]\n",
+				arch_zone_lowest_possible_pfn[i] << PAGE_SHIFT,
+				(arch_zone_highest_possible_pfn[i]
+					<< PAGE_SHIFT) - 1);
+	}
+
+	/* Print out the PFNs ZONE_MOVABLE begins at in each node */
+	printk("Movable zone start for each node\n");
+	for (i = 0; i < MAX_NUMNODES; i++) {
+		if (zone_movable_pfn[i])
+			printk("  Node %d: %#010lx\n", i,
+			       zone_movable_pfn[i] << PAGE_SHIFT);
+	}
+
+	/* Print out the early node map */
+	printk("Early memory node ranges\n");
+	for_each_mem_pfn_range(i, MAX_NUMNODES, &start_pfn, &end_pfn, &nid)
+		printk("  node %3d: [mem %#010lx-%#010lx]\n", nid,
+		       start_pfn << PAGE_SHIFT, (end_pfn << PAGE_SHIFT) - 1);
+
+	/* Initialise every node */
+	//alloc_node_mem_map(pgdat) + free_area_init_core
+	mminit_verify_pageflags_layout();
+	setup_nr_node_ids();
+	for_each_online_node(nid) {
+		pg_data_t *pgdat = NODE_DATA(nid);
+		free_area_init_node(nid, NULL,
+				find_min_pfn_for_node(nid), NULL);
+
+		/* Any memory on that node */
+		if (pgdat->node_present_pages)
+			node_set_state(nid, N_MEMORY);
+		check_for_memory(pgdat, nid);
+	}
+}
