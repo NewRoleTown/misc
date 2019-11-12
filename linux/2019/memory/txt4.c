@@ -265,3 +265,14 @@ void __init free_area_init_nodes(unsigned long *max_zone_pfn)
 		check_for_memory(pgdat, nid);
 	}
 }
+
+gfp_zone
+if( flag & dma )
+	return dma
+if( flag & dma32 )
+	return dma32
+if( flag & high && flag & movable )
+	return movable
+if( flag & high )
+	return high
+return normal
