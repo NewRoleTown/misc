@@ -86,7 +86,6 @@ out:
 }
 
 //传入gfp_highmem，尽量从高端内存获取
-页表只改这张，lazy模式
 #define pgd_offset_k(address) pgd_offset(&init_mm, address)
 void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 				pgprot_t prot, int node)

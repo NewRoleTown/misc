@@ -1,0 +1,3 @@
+PsLookUpProcessByProcessId函数中硬编码找PspCidTable
+PspCidTable是一个指针，指向_HANDLE_TABLE结构，该结构第一项是一个掩码指针，可能指向0，1，2级表，
+最终的表格，其表项是_HANDLE_TABLE_ENTRY,存着EPROCESS的值

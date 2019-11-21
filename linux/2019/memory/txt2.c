@@ -576,6 +576,48 @@ static void __init permanent_kmaps_init(pgd_t *pgd_base)
 	pkmap_page_table = pte;	
 }
 
+
+static int pkmap_count[LAST_PKMAP];
+指定了每个持久映射页面的状态
+0可使用，1TLB未刷新
+
+void *kmap(struct page *page)
+{
+	might_sleep();
+	if (!PageHighMem(page))
+		return page_address(page);
+	return kmap_high(page);
+}
+
+void *kmap_high(struct page *page)
+{
+	unsigned long vaddr;
+	lock_kmap();
+	vaddr = (unsigned long)page_address(page);
+	if (!vaddr)
+		vaddr = map_new_virtual(page);
+	pkmap_count[PKMAP_NR(vaddr)]++;
+	BUG_ON(pkmap_count[PKMAP_NR(vaddr)] < 2);
+	unlock_kmap();
+	return (void*) vaddr;
+}
+
+struct page_address_map {
+	struct page *page;
+	void *virtual;
+	struct list_head list;
+};
+
+static struct page_address_map page_address_maps[LAST_PKMAP];
+
+/*
+ * Hash table bucket
+ */
+static struct page_address_slot {
+	struct list_head lh;			/* List of page_address_maps */
+	spinlock_t lock;			/* Protect this bucket's list */
+} ____cacheline_aligned_in_smp page_address_htable[1<<PA_HASH_ORDER];
+
 unsigned long __FIXADDR_TOP = 0xfffff000;
 
 enum fixed_addresses {
