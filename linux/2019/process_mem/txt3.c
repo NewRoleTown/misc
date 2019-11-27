@@ -6,7 +6,7 @@ struct address_space {
 	spinlock_t		tree_lock;	/* and lock protecting it */
 	unsigned int		i_mmap_writable;/* count VM_SHARED mappings */
 	//vm_area_struct红黑树
-	struct rb_root		i_mmap;		/* tree of private and shared mappings */
+	struct prio_tree_root	i_mmap;		/* tree of private and shared mappings */
 	struct list_head	i_mmap_nonlinear;/*list VM_NONLINEAR mappings */
 	struct mutex		i_mmap_mutex;	/* protect tree, count, list */
 	/* Protected by tree_lock together with the radix tree */
@@ -19,6 +19,7 @@ struct address_space {
 	struct list_head	private_list;	/* ditto */
 	void			*private_data;	/* ditto */
 } __attribute__((aligned(sizeof(long))));
+
 
 struct vm_area_struct {
 	struct mm_struct * vm_mm;	/* The address space we belong to. */
@@ -68,6 +69,7 @@ struct vm_area_struct {
 	struct anon_vma *anon_vma;	/* Serialized by page_table_lock */
 
 	/* Function pointers to deal with this struct. */
+	//mm/filemap.c .fault = filemap_fault
 	struct vm_operations_struct * vm_ops;
 
 	/* Information about our backing store: */
@@ -81,3 +83,203 @@ struct vm_area_struct {
 	atomic_t vm_usage;		/* refcount (VMAs shared if !MMU) */
 #endif
 };
+
+int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
+{
+	struct vm_area_struct * __vma, * prev;
+	struct rb_node ** rb_link, * rb_parent;
+
+	/*
+	 * The vm_pgoff of a purely anonymous vma should be irrelevant
+	 * until its first write fault, when page's anon_vma and index
+	 * are set.  But now set the vm_pgoff it will almost certainly
+	 * end up with (unless mremap moves it elsewhere before that
+	 * first wfault), so /proc/pid/maps tells a consistent story.
+	 *
+	 * By setting it to reflect the virtual start address of the
+	 * vma, merges and splits can happen in a seamless way, just
+	 * using the existing file pgoff checks and manipulations.
+	 * Similarly in do_mmap_pgoff and in do_brk.
+	 */
+	if (!vma->vm_file) {
+		BUG_ON(vma->anon_vma);
+		vma->vm_pgoff = vma->vm_start >> PAGE_SHIFT;
+	}
+	//在红黑树中寻找前一个__vma,红黑树上层节点
+	__vma = find_vma_prepare(mm,vma->vm_start,&prev,&rb_link,&rb_parent);
+	if (__vma && __vma->vm_start < vma->vm_end)
+		return -ENOMEM;
+	vma_link(mm, vma, prev, rb_link, rb_parent);
+	return 0;
+}
+
+static void vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
+			struct vm_area_struct *prev, struct rb_node **rb_link,
+			struct rb_node *rb_parent)
+{
+	struct address_space *mapping = NULL;
+
+	//如果这个区域和文件相关，获取其address_space
+	if (vma->vm_file)
+		mapping = vma->vm_file->f_mapping;
+
+	if (mapping) {
+		spin_lock(&mapping->i_mmap_lock);
+		vma->vm_truncate_count = mapping->truncate_count;
+	}
+	anon_vma_lock(vma);
+
+	__vma_link(mm, vma, prev, rb_link, rb_parent);
+	__vma_link_file(vma);
+
+	anon_vma_unlock(vma);
+	if (mapping)
+		spin_unlock(&mapping->i_mmap_lock);
+
+	mm->map_count++;
+	validate_mm(mm);
+}
+
+static inline void __vma_link_file(struct vm_area_struct *vma)
+{
+	struct file * file;
+
+	file = vma->vm_file;
+	if (file) {
+		struct address_space *mapping = file->f_mapping;
+
+		if (vma->vm_flags & VM_DENYWRITE)
+			atomic_dec(&file->f_path.dentry->d_inode->i_writecount);
+		if (vma->vm_flags & VM_SHARED)
+			mapping->i_mmap_writable++;
+
+		flush_dcache_mmap_lock(mapping);
+		//如果是非线性区域
+		if (unlikely(vma->vm_flags & VM_NONLINEAR))
+			vma_nonlinear_insert(vma, &mapping->i_mmap_nonlinear);
+		else//插入优先树
+			vma_prio_tree_insert(vma, &mapping->i_mmap);
+		flush_dcache_mmap_unlock(mapping);
+	}
+}
+
+
+//先尝试插入优先树，如果已经有了相同(地址起始,地址结束)，则进if流程，此时ptr指向相同的结点
+void vma_prio_tree_insert(struct vm_area_struct *vma,
+			  struct prio_tree_root *root)
+{
+	struct prio_tree_node *ptr;
+	struct vm_area_struct *old;
+
+	vma->shared.vm_set.head = NULL;
+
+	ptr = raw_prio_tree_insert(root, &vma->shared.prio_tree_node);
+
+	if (ptr != (struct prio_tree_node *) &vma->shared.prio_tree_node) {
+        //获取vm_area
+		old = prio_tree_entry(ptr, struct vm_area_struct,
+					shared.prio_tree_node);
+		vma_prio_tree_add(vma, old);
+	}
+}
+
+
+如果这个结点有parent,说明在树里，如果head还没有初始化，初始化一下，然后建链，否则add_tail
+void vma_prio_tree_add(struct vm_area_struct *vma, struct vm_area_struct *old)
+{
+	vma->shared.vm_set.head = NULL;
+	vma->shared.vm_set.parent = NULL;
+
+	if (!old->shared.vm_set.parent)
+		list_add(&vma->shared.vm_set.list,
+				&old->shared.vm_set.list);
+	else if (old->shared.vm_set.head)
+		list_add_tail(&vma->shared.vm_set.list,
+				&old->shared.vm_set.head->shared.vm_set.list);
+	else {
+		INIT_LIST_HEAD(&vma->shared.vm_set.list);
+		//第一个重复的不在list里面
+		vma->shared.vm_set.head = old;
+		old->shared.vm_set.head = vma;
+	}
+}
+
+//此树要保证父节点的heap_index大于子节点
+//同时子节点的左右通过mask掩码来算，一定程度平衡高度
+struct prio_tree_node *prio_tree_insert(struct prio_tree_root *root,
+		struct prio_tree_node *node)
+{
+	struct prio_tree_node *cur, *res = node;
+	unsigned long radix_index, heap_index;
+	unsigned long r_index, h_index, index, mask;
+	int size_flag = 0;
+
+	//获取待插入的node的起始位置和结束位置(pg_off)
+	get_index(root, node, &radix_index, &heap_index);
+
+	if (prio_tree_empty(root) ||
+			heap_index > prio_tree_maxindex(root->index_bits))
+		return prio_tree_expand(root, node, heap_index);
+
+	cur = root->prio_tree_node;
+	mask = 1UL << (root->index_bits - 1);
+
+	while (mask) {
+		get_index(root, cur, &r_index, &h_index);
+
+		//如果当前节点的范围和待插入节点范围一致，返回
+		if (r_index == radix_index && h_index == heap_index)
+			return cur;
+
+		//待插的结束 > 当前的结束
+                if (h_index < heap_index ||
+						//待插的结束 == 当前的结束 并且 当前起始 > 待插起始
+		    (h_index == heap_index && r_index > radix_index)) {
+			struct prio_tree_node *tmp = node;
+			node = prio_tree_replace(root, cur, node);
+			cur = tmp;
+			/* swap indices */
+			index = r_index;
+			r_index = radix_index;
+			radix_index = index;
+			index = h_index;
+			h_index = heap_index;
+			heap_index = index;
+			//此时待插入节点范围比当前节点大，替换之
+		}
+
+		if (size_flag)
+			index = heap_index - radix_index;
+		else
+			index = radix_index;
+
+		if (index & mask) {
+			if (prio_tree_right_empty(cur)) {
+				//待插入节点插入到当前节点的右边，返回
+				INIT_PRIO_TREE_NODE(node);
+				cur->right = node;
+				node->parent = cur;
+				return res;
+			} else
+				cur = cur->right;
+		} else {
+			if (prio_tree_left_empty(cur)) {
+				INIT_PRIO_TREE_NODE(node);
+				cur->left = node;
+				node->parent = cur;
+				return res;
+			} else
+				cur = cur->left;
+		}
+
+		mask >>= 1;
+
+		if (!mask) {
+			mask = 1UL << (BITS_PER_LONG - 1);
+			size_flag = 1;
+		}
+	}
+	/* Should not reach here */
+	BUG();
+	return NULL;
+}
