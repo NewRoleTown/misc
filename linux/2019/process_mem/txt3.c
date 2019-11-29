@@ -140,6 +140,26 @@ static void vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 	validate_mm(mm);
 }
 
+static void
+__vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
+	struct vm_area_struct *prev, struct rb_node **rb_link,
+	struct rb_node *rb_parent)
+{
+	//插入mm链表和mm红黑树
+	__vma_link_list(mm, vma, prev, rb_parent);
+	__vma_link_rb(mm, vma, rb_link, rb_parent);
+
+	__anon_vma_link(vma);
+}
+
+void __anon_vma_link(struct vm_area_struct *vma)
+{
+	struct anon_vma *anon_vma = vma->anon_vma;
+
+	if (anon_vma)
+		list_add_tail(&vma->anon_vma_node, &anon_vma->head);
+}
+
 static inline void __vma_link_file(struct vm_area_struct *vma)
 {
 	struct file * file;
@@ -282,4 +302,45 @@ struct prio_tree_node *prio_tree_insert(struct prio_tree_root *root,
 	/* Should not reach here */
 	BUG();
 	return NULL;
+}
+
+//如果mmap区向下扩展，分配函数改为arch_get_unmapped_area_topdown
+unsigned long
+arch_get_unmapped_area(struct file *filp, unsigned long addr,
+		unsigned long len, unsigned long pgoff, unsigned long flags)
+{
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *vma;
+	unsigned long start_addr;
+	unsigned long begin, end;
+	
+    //如果设置了固定地址，直接返回不寻找空闲区
+	if (flags & MAP_FIXED)
+		return addr;
+
+	//#define TASK_UNMAPPED_BASE	(PAGE_ALIGN(TASK_SIZE / 3))   ~~~~~~   TASK_SIZE
+	find_start_end(flags, &begin, &end); 
+
+	if (len > end)
+		return -ENOMEM;
+    //如果该地址可用,返回
+	if (addr) {
+		addr = PAGE_ALIGN(addr);
+		vma = find_vma(mm, addr);
+		if (end - len >= addr &&
+		    (!vma || addr + len <= vma->vm_start))
+			return addr;
+	}
+	if (((flags & MAP_32BIT) || test_thread_flag(TIF_IA32))
+	    && len <= mm->cached_hole_size) {
+	        mm->cached_hole_size = 0;
+		mm->free_area_cache = begin;
+	}
+	addr = mm->free_area_cache;
+	if (addr < begin) 
+		addr = begin; 
+	start_addr = addr;
+//忽略addr找其他的
+full_search:
+	...
 }
