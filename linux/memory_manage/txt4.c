@@ -586,7 +586,6 @@ int move_freepages(struct zone *zone,
 			page++;
 			continue;
 		}
-        //不在伙伴系统管理下
 		if (!PageBuddy(page)) {
 			page++;
 			continue;

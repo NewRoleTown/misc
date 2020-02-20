@@ -28,7 +28,7 @@ class Iterator_Traits<T*>{
 		typedef T value_type;
 		typedef T *pointer;
 		typedef T &reference;
-		typedef ptrdiff_t difference_yupe;
+		typedef ptrdiff_t difference_type;
 		typedef random_iterator iterator_category;
 
 };
@@ -226,7 +226,6 @@ class myVector{
 				;
 			}else{
 				_destory(position );
-
 			}
 		}
 
